@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex as StdMutex};
 
 use anyhow::{anyhow, Result};
 use async_openai::{
@@ -14,15 +15,15 @@ use async_openai::{
 };
 use futures::StreamExt;
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-// `Manager` is needed for app.path() and app.state()
-use tokio::sync::Mutex;
 
 const N_CTX: u32 = 4096;
 const MAX_NEW_TOKENS: i32 = 1024;
@@ -31,7 +32,8 @@ const N_GPU_LAYERS: u32 = 999;
 #[derive(Default)]
 pub struct LlmState {
     backend: StdMutex<Option<Arc<LlamaBackend>>>,
-    loaded: Mutex<Option<Loaded>>,
+    loaded: StdMutex<Option<LoadedHandle>>,
+    cancel: Arc<AtomicBool>,
 }
 
 impl LlmState {
@@ -46,11 +48,11 @@ impl LlmState {
     }
 
     pub fn shutdown(&self) {
-        // Drop the model first (it owns llama_model pointers that talk to the
-        // backend), then drop the backend (which frees ggml metal devices).
-        // Doing this before the process calls exit() avoids racing C++ static
-        // destructors inside ggml-metal.
-        if let Ok(mut g) = self.loaded.try_lock() {
+        // Drop the worker (which holds the model + context) first, then the
+        // backend. Dropping the sender closes the channel; the worker thread
+        // exits and releases the model + context before we tear down the
+        // backend / ggml-metal devices.
+        if let Ok(mut g) = self.loaded.lock() {
             *g = None;
         }
         if let Ok(mut g) = self.backend.lock() {
@@ -59,9 +61,21 @@ impl LlmState {
     }
 }
 
-struct Loaded {
+// A handle to the per-model worker thread. Dropping `sender` closes the
+// channel; the worker observes that and exits, releasing the LlamaContext
+// and LlamaModel it owns.
+struct LoadedHandle {
     path: String,
-    model: Arc<LlamaModel>,
+    sender: mpsc::Sender<WorkerRequest>,
+}
+
+enum WorkerRequest {
+    Chat {
+        messages: Vec<ChatMsg>,
+        cancel: Arc<AtomicBool>,
+        app: AppHandle,
+        respond: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -112,19 +126,24 @@ pub async fn do_load(app: &AppHandle, path: String) -> Result<ModelStatus, Strin
     let state = app.state::<LlmState>();
     let backend = state.ensure_backend().map_err(|e| e.to_string())?;
     let path_for_load = path.clone();
+    let backend_for_load = backend.clone();
     let model = tokio::task::spawn_blocking(move || -> Result<LlamaModel, String> {
         let params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
-        LlamaModel::load_from_file(&backend, Path::new(&path_for_load), &params)
+        LlamaModel::load_from_file(&backend_for_load, Path::new(&path_for_load), &params)
             .map_err(|e| format!("load_from_file: {e}"))
     })
     .await
     .map_err(|e| e.to_string())??;
 
+    let model = Arc::new(model);
+    let sender = spawn_worker(model, backend);
     {
-        let mut guard = state.loaded.lock().await;
-        *guard = Some(Loaded {
+        let mut guard = state.loaded.lock().unwrap();
+        // Replacing drops the previous handle (and its sender), which causes
+        // the previous worker thread to exit and release its context + model.
+        *guard = Some(LoadedHandle {
             path: path.clone(),
-            model: Arc::new(model),
+            sender,
         });
     }
     persist_last_model(app, &path);
@@ -148,8 +167,8 @@ pub async fn load_model(app: AppHandle, path: String) -> Result<ModelStatus, Str
 }
 
 #[tauri::command]
-pub async fn model_status(state: State<'_, LlmState>) -> Result<ModelStatus, String> {
-    let guard = state.loaded.lock().await;
+pub fn model_status(state: State<'_, LlmState>) -> Result<ModelStatus, String> {
+    let guard = state.loaded.lock().unwrap();
     Ok(match guard.as_ref() {
         Some(l) => ModelStatus {
             loaded: true,
@@ -298,13 +317,24 @@ pub fn cloud_providers() -> Vec<CloudProviderInfo> {
 }
 
 #[tauri::command]
+pub fn cancel_chat(state: State<'_, LlmState>) {
+    state.cancel.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command]
 pub async fn chat(
     app: AppHandle,
     messages: Vec<ChatMsg>,
     opts: ChatOpts,
 ) -> Result<String, String> {
+    let cancel = {
+        let state = app.state::<LlmState>();
+        state.cancel.store(false, Ordering::Relaxed);
+        state.cancel.clone()
+    };
+
     if opts.provider == "local" {
-        return run_local_chat(&app, messages).await;
+        return run_local_chat(&app, messages, cancel).await;
     }
     let def = cloud_provider_def(&opts.provider)
         .ok_or_else(|| format!("unknown provider: {}", opts.provider))?;
@@ -346,33 +376,37 @@ pub async fn chat(
         })
         .ok_or_else(|| "model is required".to_string())?;
 
-    run_cloud_chat(&app, messages, model, api_key, base_url).await
+    run_cloud_chat(&app, messages, model, api_key, base_url, cancel).await
 }
 
-async fn run_local_chat(app: &AppHandle, messages: Vec<ChatMsg>) -> Result<String, String> {
-    let (model, backend) = {
+async fn run_local_chat(
+    app: &AppHandle,
+    messages: Vec<ChatMsg>,
+    cancel: Arc<AtomicBool>,
+) -> Result<String, String> {
+    let sender = {
         let state = app.state::<LlmState>();
-        let loaded = state.loaded.lock().await;
-        let model = loaded
+        let guard = state.loaded.lock().unwrap();
+        guard
             .as_ref()
             .ok_or_else(|| "no model loaded".to_string())?
-            .model
-            .clone();
-        let backend = state
-            .backend
-            .lock()
-            .unwrap()
-            .as_ref()
-            .ok_or_else(|| "backend not initialized".to_string())?
-            .clone();
-        (model, backend)
+            .sender
+            .clone()
     };
 
-    let app_for_task = app.clone();
-    tokio::task::spawn_blocking(move || run_chat(&app_for_task, &model, &backend, messages))
+    let (respond_tx, respond_rx) = tokio::sync::oneshot::channel();
+    sender
+        .send(WorkerRequest::Chat {
+            messages,
+            cancel,
+            app: app.clone(),
+            respond: respond_tx,
+        })
+        .map_err(|_| "model worker exited".to_string())?;
+
+    respond_rx
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|_| "model worker dropped response".to_string())?
 }
 
 fn to_openai_messages(
@@ -409,6 +443,7 @@ async fn run_cloud_chat(
     model: String,
     api_key: String,
     base_url: String,
+    cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let openai_msgs = to_openai_messages(messages)?;
     let request = CreateChatCompletionRequestArgs::default()
@@ -430,6 +465,9 @@ async fn run_cloud_chat(
 
     let mut full = String::new();
     while let Some(result) = stream.next().await {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         match result {
             Ok(response) => {
                 for choice in response.choices {
@@ -449,53 +487,128 @@ async fn run_cloud_chat(
     Ok(full)
 }
 
-fn run_chat(
+fn spawn_worker(
+    model: Arc<LlamaModel>,
+    backend: Arc<LlamaBackend>,
+) -> mpsc::Sender<WorkerRequest> {
+    let (tx, rx) = mpsc::channel::<WorkerRequest>();
+    std::thread::spawn(move || worker_loop(model, backend, rx));
+    tx
+}
+
+fn worker_loop(
+    model: Arc<LlamaModel>,
+    backend: Arc<LlamaBackend>,
+    rx: mpsc::Receiver<WorkerRequest>,
+) {
+    // Borrow the model for the lifetime of this stack frame; the LlamaContext
+    // borrows from it. Both `ctx` and the borrow drop before `model` does
+    // because of reverse-declaration drop order.
+    let model_ref: &LlamaModel = &model;
+    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(N_CTX));
+    let mut ctx = match model_ref.new_context(&backend, ctx_params) {
+        Ok(c) => c,
+        Err(e) => {
+            let err = format!("new_context: {e}");
+            eprintln!("{err}");
+            // Reply to any pending requests with the init error rather than
+            // hanging.
+            while let Ok(WorkerRequest::Chat { respond, .. }) = rx.recv() {
+                let _ = respond.send(Err(err.clone()));
+            }
+            return;
+        }
+    };
+
+    // Tokens currently committed to the KV cache for sequence 0. Used to
+    // find the longest common prefix with each new prompt so we only have
+    // to re-decode the divergent suffix.
+    let mut cached: Vec<LlamaToken> = Vec::new();
+
+    while let Ok(WorkerRequest::Chat {
+        messages,
+        cancel,
+        app,
+        respond,
+    }) = rx.recv()
+    {
+        let result = run_chat_with_cache(&app, model_ref, &mut ctx, &mut cached, messages, cancel);
+        let _ = respond.send(result);
+    }
+}
+
+fn run_chat_with_cache(
     app: &AppHandle,
     model: &LlamaModel,
-    backend: &LlamaBackend,
+    ctx: &mut LlamaContext<'_>,
+    cached: &mut Vec<LlamaToken>,
     messages: Vec<ChatMsg>,
-) -> Result<String> {
+    cancel: Arc<AtomicBool>,
+) -> Result<String, String> {
     let chat_msgs: Vec<LlamaChatMessage> = messages
         .into_iter()
         .map(|m| {
             LlamaChatMessage::new(m.role, m.content)
-                .map_err(|e| anyhow!("invalid chat message: {e}"))
+                .map_err(|e| format!("invalid chat message: {e}"))
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<_, _>>()?;
 
     let template = model
         .chat_template(None)
-        .map_err(|e| anyhow!("model has no chat_template metadata: {e}"))?;
+        .map_err(|e| format!("model has no chat_template metadata: {e}"))?;
     let prompt = model
         .apply_chat_template(&template, &chat_msgs, true)
-        .map_err(|e| anyhow!("apply_chat_template: {e}"))?;
+        .map_err(|e| format!("apply_chat_template: {e}"))?;
 
-    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(N_CTX));
-    let mut ctx = model
-        .new_context(backend, ctx_params)
-        .map_err(|e| anyhow!("new_context: {e}"))?;
-
-    let tokens = model
+    let new_tokens = model
         .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| anyhow!("str_to_token: {e}"))?;
+        .map_err(|e| format!("str_to_token: {e}"))?;
 
-    let prompt_len = tokens.len() as i32;
+    // Longest common prefix between the cached tokens (in the KV cache) and
+    // the freshly tokenized prompt.
+    let mut common = 0usize;
+    while common < cached.len()
+        && common < new_tokens.len()
+        && cached[common] == new_tokens[common]
+    {
+        common += 1;
+    }
+
+    // Drop everything beyond the common prefix from the KV cache and from
+    // our shadow vector.
+    if common < cached.len() {
+        ctx.clear_kv_cache_seq(Some(0), Some(common as u32), None)
+            .map_err(|e| format!("clear_kv_cache_seq: {e}"))?;
+        cached.truncate(common);
+    }
+
+    let to_add = &new_tokens[common..];
+    let prompt_len = new_tokens.len() as i32;
     let n_ctx_i = ctx.n_ctx() as i32;
     let max_new = MAX_NEW_TOKENS.min(n_ctx_i - prompt_len - 8).max(0);
     if max_new == 0 {
-        return Err(anyhow!("prompt fills the context window"));
+        return Err("prompt fills the context window".to_string());
+    }
+    if to_add.is_empty() {
+        // Nothing to feed: the new prompt is already entirely in the KV
+        // cache. This shouldn't happen because chat templates append an
+        // assistant-prefix marker each turn, but guard so we don't sample
+        // off a stale logits row.
+        return Err("no new tokens to decode".to_string());
     }
 
-    let mut batch = LlamaBatch::new(prompt_len.max(512) as usize, 1);
-    let last_idx = prompt_len - 1;
-    for (i, t) in tokens.iter().enumerate() {
-        let i = i as i32;
+    // Decode the divergent suffix of the prompt into the KV cache.
+    let mut batch = LlamaBatch::new(to_add.len().max(512), 1);
+    let last_idx = to_add.len() - 1;
+    for (i, t) in to_add.iter().enumerate() {
+        let pos = common as i32 + i as i32;
         batch
-            .add(*t, i, &[0], i == last_idx)
-            .map_err(|e| anyhow!("batch.add prompt: {e}"))?;
+            .add(*t, pos, &[0], i == last_idx)
+            .map_err(|e| format!("batch.add prompt: {e}"))?;
     }
     ctx.decode(&mut batch)
-        .map_err(|e| anyhow!("decode prompt: {e}"))?;
+        .map_err(|e| format!("decode prompt: {e}"))?;
+    cached.extend_from_slice(to_add);
 
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::temp(0.7),
@@ -508,16 +621,23 @@ fn run_chat(
     let mut produced = 0;
 
     while produced < max_new {
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let token = sampler.sample(ctx, batch.n_tokens() - 1);
         sampler.accept(token);
 
         if model.is_eog_token(token) {
+            // Don't push the EOG token to `cached` — we already truncated
+            // back to `common` and only added prompt tokens. The KV cache
+            // currently reflects the prompt only, which is what we want
+            // for the next turn's prefix match.
             break;
         }
 
         let bytes = model
             .token_to_piece_bytes(token, 64, false, None)
-            .map_err(|e| anyhow!("token_to_piece_bytes: {e}"))?;
+            .map_err(|e| format!("token_to_piece_bytes: {e}"))?;
         let mut piece = String::with_capacity(bytes.len() + 4);
         let _ = decoder.decode_to_string(&bytes, &mut piece, false);
 
@@ -529,11 +649,15 @@ fn run_chat(
         batch.clear();
         batch
             .add(token, n_cur, &[0], true)
-            .map_err(|e| anyhow!("batch.add gen: {e}"))?;
+            .map_err(|e| format!("batch.add gen: {e}"))?;
         n_cur += 1;
         produced += 1;
         ctx.decode(&mut batch)
-            .map_err(|e| anyhow!("decode gen: {e}"))?;
+            .map_err(|e| format!("decode gen: {e}"))?;
+        // Track the generated token in the KV cache shadow, so the next
+        // turn's prompt (which will include this assistant response) finds
+        // a longer matching prefix.
+        cached.push(token);
     }
 
     let _ = app.emit("chat-done", &full);

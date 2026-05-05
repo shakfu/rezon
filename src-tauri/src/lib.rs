@@ -12,6 +12,7 @@ pub fn run() {
             llm::load_model,
             llm::model_status,
             llm::chat,
+            llm::cancel_chat,
             llm::cloud_providers
         ])
         .setup(|app| {

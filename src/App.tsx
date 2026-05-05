@@ -454,9 +454,21 @@ function App() {
           rows={2}
           disabled={inputDisabled}
         />
-        <button type="submit" disabled={sendDisabled}>
-          Send
-        </button>
+        {streaming ? (
+          <button
+            type="button"
+            className="stop"
+            onClick={() => {
+              invoke("cancel_chat").catch(() => {});
+            }}
+          >
+            Stop
+          </button>
+        ) : (
+          <button type="submit" disabled={sendDisabled}>
+            Send
+          </button>
+        )}
       </form>
     </main>
   );

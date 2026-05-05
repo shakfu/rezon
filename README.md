@@ -43,6 +43,9 @@ Working end-to-end on macOS:
   syntax-highlighted code blocks (highlight.js, github-dark).
 - Model and backend are torn down cleanly on app exit to avoid races with
   ggml-metal C++ static destructors.
+- Each loaded local model gets a dedicated worker thread that holds the
+  `LlamaContext` and reuses the KV cache across turns: only the divergent
+  suffix of each new prompt is decoded.
 
 ## Architecture
 
@@ -60,6 +63,7 @@ Tauri commands exposed to the frontend:
 
 - `load_model(path)` -> `ModelStatus`
 - `model_status()` -> `ModelStatus`
+- `cancel_chat()` -> `()` (signals the in-flight `chat` to abort)
 - `cloud_providers()` -> `CloudProviderInfo[]` (key, label, envVar,
   defaultModel, recommendedModels, apiKeySet, userConfigurable)
 - `chat(messages, opts)` -> `String` (streams via `chat-token` events).

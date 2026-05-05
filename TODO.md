@@ -4,8 +4,6 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 
 ## Inference / backend
 
-- [ ] Cancel an in-flight `chat` for both backends (local runs to
-      `MAX_NEW_TOKENS` / EOG; cloud streams aren't aborted on UI cancel).
 - [ ] Cloud: forward sampling params (temperature, top_p, max_tokens) from
       the UI instead of using API defaults.
 - [ ] Cloud: surface non-stream errors with HTTP status / body, not just
@@ -20,8 +18,11 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 - [ ] Re-check API-key env vars per request rather than only at app
       launch, so users don't have to relaunch after exporting a key
       (`cloud_providers()` only snapshots availability at call time).
-- [ ] Reuse the `LlamaContext` across turns and keep the KV cache instead of
-      rebuilding context + re-decoding the full prompt on every call.
+- [ ] Load API keys from a `.env` file via
+      [`dotenvy`](https://crates.io/crates/dotenvy). For `tauri dev`,
+      call `dotenvy::dotenv().ok()` early in `lib.rs::run()`. For
+      packaged builds, resolve a path under the app config dir
+      (`dotenvy::from_path(...)`) since the cwd isn't predictable.
 - [ ] Configurable sampler: temperature, top-p, top-k, repeat penalty, seed
       (currently hard-coded `temp(0.7)` + `dist(1234)`).
 - [ ] Configurable `n_ctx`, `max_new_tokens`, `n_gpu_layers` (currently
@@ -32,6 +33,9 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 - [ ] Graceful error when the model has no embedded chat-template metadata
       (today it just bubbles up as a string).
 - [ ] Handle prompts that overflow `n_ctx` (truncate history vs. error).
+      Now that the KV cache persists across turns, a sliding-window
+      eviction (drop oldest non-system tokens via `clear_kv_cache_seq` +
+      `kv_cache_seq_add`) is more useful than just erroring.
 - [ ] Non-macOS build paths (CUDA / CPU-only feature flags).
 
 ## Frontend / UX
@@ -39,7 +43,6 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 - [ ] Persist conversation history across restarts.
 - [ ] Multiple conversations / sidebar.
 - [ ] Editable system prompt (currently a const in `App.tsx`).
-- [ ] Stop button while streaming.
 - [ ] Copy-message and copy-code-block buttons.
 - [ ] Token / timing stats (tok/s, prompt vs. gen tokens).
 - [ ] Better empty / error states; the current load-error banner is plain

@@ -6,6 +6,27 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- KV cache reuse across turns for the local backend. Each loaded model now
+  owns a dedicated worker thread that holds the `LlamaContext` and a
+  shadow `Vec<LlamaToken>` of tokens currently in the KV cache. On each
+  request the worker tokenizes the new full prompt, finds the longest
+  common prefix with the cached tokens, calls `clear_kv_cache_seq` to
+  truncate the KV cache to that point, and decodes only the divergent
+  suffix before sampling. Continuing the same conversation now re-decodes
+  ~zero prompt tokens instead of the full history.
+- Stop button to abort an in-flight chat. New `cancel_chat` Tauri command
+  flips an `AtomicBool` on `LlmState` that the local generation loop and
+  the cloud stream loop both poll between iterations. The flag is reset
+  at the start of each new `chat`. While streaming, the chat-input Send
+  button is replaced by a red Stop button.
+
+### Changed
+- `LlmState.loaded` switched from `tokio::sync::Mutex<Option<Loaded>>` to
+  `std::sync::Mutex<Option<LoadedHandle>>`. The handle holds the path and
+  an `mpsc::Sender<WorkerRequest>` for the worker thread, which owns the
+  model and context (`LlamaContext<'a>` is `<'a>`-tied to `LlamaModel` and
+  not `Send`, so the only safe way to keep it alive between turns is to
+  pin it to a single thread). `model_status` is now a sync command.
 - Cloud providers via [`async-openai`](https://github.com/64bit/async-openai)
   0.36 (`chat-completion` feature). Four OpenAI-compatible providers ship
   out of the box. The first three are env-driven with hard-coded base URL,
