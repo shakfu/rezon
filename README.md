@@ -1,7 +1,33 @@
 # rezo
 
-Local LLM chat desktop app. Tauri 2 + React 19 frontend, Rust backend wrapping
-[`llama-cpp-2`](https://crates.io/crates/llama-cpp-2) with Metal acceleration.
+LLM chat desktop app. Tauri 2 + React 19 frontend, Rust backend with
+interchangeable providers:
+
+- **Local**: [`llama-cpp-2`](https://crates.io/crates/llama-cpp-2) with Metal
+  acceleration, loading any `.gguf` model from disk.
+- **Cloud (OpenAI / Anthropic / OpenRouter)**:
+  [`async-openai`](https://github.com/64bit/async-openai) client pointed at
+  each provider's OpenAI-compatible endpoint.
+- **Other**: same `async-openai` client with model + base URL + API key
+  entered in the UI. Targets any OpenAI-compatible server — Ollama,
+  LM Studio, `llama.cpp` `server`, self-hosted gateways, etc.
+
+The provider is chosen per-message via a radio toggle in the UI. Named
+cloud providers expose a recommended-models dropdown alongside a free-text
+model override; **Other** instead takes model + base URL + API key as free
+text.
+
+### Cloud providers
+
+| key          | env var              | base URL                             |
+| ------------ | -------------------- | ------------------------------------ |
+| `openai`     | `OPENAI_API_KEY`     | `https://api.openai.com/v1`          |
+| `anthropic`  | `ANTHROPIC_API_KEY`  | `https://api.anthropic.com/v1`       |
+| `openrouter` | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1`       |
+| `other`      | (entered in UI)      | (entered in UI)                      |
+
+The recommended-models lists for the named providers live in
+`src-tauri/src/llm.rs`.
 
 ## Status
 
@@ -34,7 +60,13 @@ Tauri commands exposed to the frontend:
 
 - `load_model(path)` -> `ModelStatus`
 - `model_status()` -> `ModelStatus`
-- `chat(messages)` -> `String` (also streams via `chat-token` events)
+- `cloud_providers()` -> `CloudProviderInfo[]` (key, label, envVar,
+  defaultModel, recommendedModels, apiKeySet, userConfigurable)
+- `chat(messages, opts)` -> `String` (streams via `chat-token` events).
+  `opts = { provider: "local" | "openai" | "anthropic" | "openrouter" |
+  "other", model?, baseUrl?, apiKey? }`. `baseUrl` and `apiKey` are
+  consumed only by `other`; named providers use their hard-coded base URL
+  and read their API key from the corresponding env var.
 
 Events emitted to the frontend:
 
@@ -58,7 +90,13 @@ the prompt; models without embedded chat-template metadata will fail to chat.
 
 - macOS with Metal (other platforms untested).
 - Rust toolchain, Bun, Tauri 2 prerequisites.
-- A GGUF model file with chat-template metadata.
+- For the local backend: a GGUF model file with chat-template metadata.
+- For named cloud backends: the relevant API key set in the environment
+  when launching the app — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
+  `OPENROUTER_API_KEY`. Recommended models and base URLs are baked into
+  `src-tauri/src/llm.rs`; free-text model override is available from the UI.
+- For `other`: nothing in the environment. Model, base URL, and (optional)
+  API key are entered in the UI per session.
 
 ## Develop
 

@@ -4,8 +4,22 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 
 ## Inference / backend
 
-- [ ] Cancel an in-flight `chat` (currently runs to `MAX_NEW_TOKENS` or EOG;
-      no stop signal from the UI).
+- [ ] Cancel an in-flight `chat` for both backends (local runs to
+      `MAX_NEW_TOKENS` / EOG; cloud streams aren't aborted on UI cancel).
+- [ ] Cloud: forward sampling params (temperature, top_p, max_tokens) from
+      the UI instead of using API defaults.
+- [ ] Cloud: surface non-stream errors with HTTP status / body, not just
+      `format!("{e}")`.
+- [ ] Persist provider choice + per-provider chosen model across restarts.
+- [ ] User-overridable cloud-models config at
+      `~/Library/Application Support/<app>/cloud-models.json`, replacing
+      the static lists in `llm.rs` when present.
+- [ ] Save the API key entered for the `other` provider (currently it
+      lives only in React state and is lost on app restart). Likely
+      destination: OS keychain.
+- [ ] Re-check API-key env vars per request rather than only at app
+      launch, so users don't have to relaunch after exporting a key
+      (`cloud_providers()` only snapshots availability at call time).
 - [ ] Reuse the `LlamaContext` across turns and keep the KV cache instead of
       rebuilding context + re-decoding the full prompt on every call.
 - [ ] Configurable sampler: temperature, top-p, top-k, repeat penalty, seed

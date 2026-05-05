@@ -35,6 +35,28 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.provider-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+
+.provider-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.provider-warn {
+  font-size: 12px;
+  color: #c33;
+  margin-left: auto;
+}
+
 .model-row {
   display: flex;
   gap: 8px;
@@ -42,7 +64,12 @@ html, body, #root {
   border-bottom: 1px solid rgba(127, 127, 127, 0.15);
 }
 
-.model-row input {
+.model-row-stack {
+  flex-direction: column;
+}
+
+.model-row input,
+.model-row select {
   flex: 1;
   padding: 6px 10px;
   border-radius: 6px;
@@ -51,6 +78,11 @@ html, body, #root {
   color: inherit;
   font: inherit;
   font-size: 13px;
+}
+
+.model-row select {
+  flex: 0 0 auto;
+  min-width: 200px;
 }
 
 

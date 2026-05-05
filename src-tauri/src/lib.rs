@@ -11,7 +11,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             llm::load_model,
             llm::model_status,
-            llm::chat
+            llm::chat,
+            llm::cloud_providers
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -6,6 +6,36 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- Cloud providers via [`async-openai`](https://github.com/64bit/async-openai)
+  0.36 (`chat-completion` feature). Four OpenAI-compatible providers ship
+  out of the box. The first three are env-driven with hard-coded base URL,
+  default model, and recommended-model list; the last is fully
+  user-configurable:
+  - **OpenAI** — `OPENAI_API_KEY`, `https://api.openai.com/v1`
+  - **Anthropic** — `ANTHROPIC_API_KEY`, `https://api.anthropic.com/v1`
+  - **OpenRouter** — `OPENROUTER_API_KEY`, `https://openrouter.ai/api/v1`
+  - **Other** — user-configurable: model, base URL, and API key are
+    entered in the UI and sent in `chat` opts. Intended for
+    OpenAI-compatible servers like Ollama (`http://localhost:11434/v1`),
+    LM Studio, or `llama.cpp` `server`. The API key is optional; an empty
+    field is sent as `"no-key"` so servers that don't authenticate ignore
+    it.
+- Provider radio in the UI now spans Local + the four cloud providers.
+  Named providers' cloud row shows a recommended-models dropdown alongside
+  a free-text override (the text input is canonical and sent to the
+  backend). The `other` row instead stacks three free-text inputs: model,
+  base URL, API key (password field).
+- New Tauri command `cloud_providers()` returns the static provider table
+  plus per-provider `apiKeySet` and `userConfigurable`. Replaces
+  `openai_available()`.
+- `chat` command takes
+  `opts: { provider, model?, baseUrl?, apiKey? }` (camelCase). `baseUrl`
+  and `apiKey` are only consumed when the provider is user-configurable
+  (i.e. `other`). **Breaking**: the previous `openaiModel` /
+  `openaiBaseUrl` fields are gone — for the named providers, base URL is
+  hard-coded.
+- All cloud providers stream deltas through the same `chat-token` /
+  `chat-done` events as the local backend.
 - Markdown rendering for assistant messages via `react-markdown` with
   `remark-gfm`.
 - KaTeX math rendering (`remark-math` + `rehype-katex`), including

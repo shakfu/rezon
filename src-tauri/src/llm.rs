@@ -3,6 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{anyhow, Result};
+use async_openai::{
+    config::OpenAIConfig,
+    types::chat::{
+        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+        CreateChatCompletionRequestArgs,
+    },
+    Client,
+};
+use futures::StreamExt;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -152,8 +162,194 @@ pub async fn model_status(state: State<'_, LlmState>) -> Result<ModelStatus, Str
     })
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatOpts {
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+struct CloudProviderDef {
+    key: &'static str,
+    label: &'static str,
+    env_var: &'static str,
+    base_url: &'static str,
+    default_model: &'static str,
+    recommended: &'static [&'static str],
+    user_configurable: bool,
+}
+
+static OPENAI_PROVIDER: CloudProviderDef = CloudProviderDef {
+    key: "openai",
+    label: "OpenAI",
+    env_var: "OPENAI_API_KEY",
+    base_url: "https://api.openai.com/v1",
+    default_model: "gpt-5.4-mini",
+    recommended: &[
+        "gpt-5.4-nano",
+        "gpt-5.4-mini",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+    ],
+    user_configurable: false,
+};
+
+static ANTHROPIC_PROVIDER: CloudProviderDef = CloudProviderDef {
+    key: "anthropic",
+    label: "Anthropic",
+    env_var: "ANTHROPIC_API_KEY",
+    base_url: "https://api.anthropic.com/v1",
+    default_model: "claude-sonnet-4-6",
+    recommended: &[
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ],
+    user_configurable: false,
+};
+
+static OPENROUTER_PROVIDER: CloudProviderDef = CloudProviderDef {
+    key: "openrouter",
+    label: "OpenRouter",
+    env_var: "OPENROUTER_API_KEY",
+    base_url: "https://openrouter.ai/api/v1",
+    default_model: "deepseek/deepseek-v3.2",
+    recommended: &[
+        "deepseek/deepseek-v3.2",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-3-flash-preview",
+        "google/gemma-4-26b-a4b-it:free",
+        "google/gemma-4-31b-it:free",
+        "moonshotai/kimi-k2.5",
+        "moonshotai/kimi-k2.6",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/owl-alpha",
+        "qwen/qwen3-235b-a22b-2507",
+        "qwen/qwen3.5-flash-02-23",
+        "qwen/qwen3.6-plus",
+        "x-ai/grok-4.1-fast",
+        "x-ai/grok-4.3",
+    ],
+    user_configurable: false,
+};
+
+static OTHER_PROVIDER: CloudProviderDef = CloudProviderDef {
+    key: "other",
+    label: "Other",
+    env_var: "",
+    base_url: "",
+    default_model: "",
+    recommended: &[],
+    user_configurable: true,
+};
+
+static CLOUD_PROVIDERS: &[&CloudProviderDef] = &[
+    &OPENAI_PROVIDER,
+    &ANTHROPIC_PROVIDER,
+    &OPENROUTER_PROVIDER,
+    &OTHER_PROVIDER,
+];
+
+fn cloud_provider_def(key: &str) -> Option<&'static CloudProviderDef> {
+    CLOUD_PROVIDERS.iter().copied().find(|p| p.key == key)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudProviderInfo {
+    key: String,
+    label: String,
+    env_var: String,
+    default_model: String,
+    recommended_models: Vec<String>,
+    api_key_set: bool,
+    user_configurable: bool,
+}
+
 #[tauri::command]
-pub async fn chat(app: AppHandle, messages: Vec<ChatMsg>) -> Result<String, String> {
+pub fn cloud_providers() -> Vec<CloudProviderInfo> {
+    CLOUD_PROVIDERS
+        .iter()
+        .map(|p| CloudProviderInfo {
+            key: p.key.to_string(),
+            label: p.label.to_string(),
+            env_var: p.env_var.to_string(),
+            default_model: p.default_model.to_string(),
+            recommended_models: p.recommended.iter().map(|s| s.to_string()).collect(),
+            // Treat user-configurable providers as always available; the
+            // user supplies the key (if any) at request time.
+            api_key_set: p.user_configurable
+                || std::env::var(p.env_var)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false),
+            user_configurable: p.user_configurable,
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn chat(
+    app: AppHandle,
+    messages: Vec<ChatMsg>,
+    opts: ChatOpts,
+) -> Result<String, String> {
+    if opts.provider == "local" {
+        return run_local_chat(&app, messages).await;
+    }
+    let def = cloud_provider_def(&opts.provider)
+        .ok_or_else(|| format!("unknown provider: {}", opts.provider))?;
+
+    let (api_key, base_url) = if def.user_configurable {
+        let base_url = opts
+            .base_url
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "base URL is required".to_string())?
+            .to_string();
+        // API key is optional for local OpenAI-compatible servers (Ollama,
+        // llama.cpp server). async-openai sends an Authorization header
+        // either way; servers that don't check it ignore the value.
+        let api_key = opts
+            .api_key
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "no-key".to_string());
+        (api_key, base_url)
+    } else {
+        let api_key = std::env::var(def.env_var)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| format!("{} is not set", def.env_var))?;
+        (api_key, def.base_url.to_string())
+    };
+
+    let model = opts
+        .model
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            if def.default_model.is_empty() {
+                None
+            } else {
+                Some(def.default_model.to_string())
+            }
+        })
+        .ok_or_else(|| "model is required".to_string())?;
+
+    run_cloud_chat(&app, messages, model, api_key, base_url).await
+}
+
+async fn run_local_chat(app: &AppHandle, messages: Vec<ChatMsg>) -> Result<String, String> {
     let (model, backend) = {
         let state = app.state::<LlmState>();
         let loaded = state.loaded.lock().await;
@@ -177,6 +373,80 @@ pub async fn chat(app: AppHandle, messages: Vec<ChatMsg>) -> Result<String, Stri
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+fn to_openai_messages(
+    messages: Vec<ChatMsg>,
+) -> Result<Vec<ChatCompletionRequestMessage>, String> {
+    messages
+        .into_iter()
+        .map(|m| -> Result<ChatCompletionRequestMessage, String> {
+            match m.role.as_str() {
+                "system" => Ok(ChatCompletionRequestSystemMessageArgs::default()
+                    .content(m.content)
+                    .build()
+                    .map_err(|e| format!("system msg: {e}"))?
+                    .into()),
+                "user" => Ok(ChatCompletionRequestUserMessageArgs::default()
+                    .content(m.content)
+                    .build()
+                    .map_err(|e| format!("user msg: {e}"))?
+                    .into()),
+                "assistant" => Ok(ChatCompletionRequestAssistantMessageArgs::default()
+                    .content(m.content)
+                    .build()
+                    .map_err(|e| format!("assistant msg: {e}"))?
+                    .into()),
+                other => Err(format!("unknown role: {other}")),
+            }
+        })
+        .collect()
+}
+
+async fn run_cloud_chat(
+    app: &AppHandle,
+    messages: Vec<ChatMsg>,
+    model: String,
+    api_key: String,
+    base_url: String,
+) -> Result<String, String> {
+    let openai_msgs = to_openai_messages(messages)?;
+    let request = CreateChatCompletionRequestArgs::default()
+        .model(&model)
+        .messages(openai_msgs)
+        .build()
+        .map_err(|e| format!("build request: {e}"))?;
+
+    let cfg = OpenAIConfig::new()
+        .with_api_key(api_key)
+        .with_api_base(base_url);
+    let client = Client::with_config(cfg);
+
+    let mut stream = client
+        .chat()
+        .create_stream(request)
+        .await
+        .map_err(|e| format!("create_stream: {e}"))?;
+
+    let mut full = String::new();
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(response) => {
+                for choice in response.choices {
+                    if let Some(content) = choice.delta.content {
+                        if !content.is_empty() {
+                            full.push_str(&content);
+                            let _ = app.emit("chat-token", &content);
+                        }
+                    }
+                }
+            }
+            Err(e) => return Err(format!("stream: {e}")),
+        }
+    }
+
+    let _ = app.emit("chat-done", &full);
+    Ok(full)
 }
 
 fn run_chat(

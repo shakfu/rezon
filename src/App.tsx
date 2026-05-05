@@ -51,6 +51,15 @@ function MessageBody({ content }: { content: string }) {
 type Role = "system" | "user" | "assistant";
 type Msg = { role: Role; content: string };
 type ModelStatus = { loaded: boolean; path: string | null };
+type CloudProviderInfo = {
+  key: string;
+  label: string;
+  envVar: string;
+  defaultModel: string;
+  recommendedModels: string[];
+  apiKeySet: boolean;
+  userConfigurable: boolean;
+};
 
 const SYSTEM_PROMPT = "You are a concise, helpful assistant.";
 
@@ -62,6 +71,11 @@ function App() {
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [provider, setProvider] = useState<string>("local");
+  const [cloudProviders, setCloudProviders] = useState<CloudProviderInfo[]>([]);
+  const [cloudModel, setCloudModel] = useState<Record<string, string>>({});
+  const [cloudBaseUrl, setCloudBaseUrl] = useState<Record<string, string>>({});
+  const [cloudApiKey, setCloudApiKey] = useState<Record<string, string>>({});
   const streamingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -125,6 +139,19 @@ function App() {
       } catch {
         /* ignore */
       }
+      try {
+        const list = await invoke<CloudProviderInfo[]>("cloud_providers");
+        setCloudProviders(list);
+        setCloudModel((prev) => {
+          const next = { ...prev };
+          for (const p of list) {
+            if (!next[p.key]) next[p.key] = p.defaultModel;
+          }
+          return next;
+        });
+      } catch {
+        /* ignore */
+      }
     })();
 
     return () => {
@@ -168,9 +195,24 @@ function App() {
     }
   }
 
+  const activeCloud = cloudProviders.find((p) => p.key === provider);
+  const activeCloudModel = activeCloud
+    ? (cloudModel[activeCloud.key] ?? "").trim()
+    : "";
+  const activeBaseUrl = activeCloud
+    ? (cloudBaseUrl[activeCloud.key] ?? "").trim()
+    : "";
+  const activeApiKey = activeCloud ? (cloudApiKey[activeCloud.key] ?? "") : "";
+  const cloudReady = activeCloud
+    ? !!activeCloudModel &&
+      (!activeCloud.userConfigurable || !!activeBaseUrl)
+    : false;
+
   async function send() {
     const text = input.trim();
-    if (!text || streaming || !loadedPath) return;
+    if (!text || streaming) return;
+    if (provider === "local" && !loadedPath) return;
+    if (activeCloud && !cloudReady) return;
     const history: Msg[] = [...messages, { role: "user", content: text }];
     setMessages([...history, { role: "assistant", content: "" }]);
     setInput("");
@@ -182,8 +224,19 @@ function App() {
       ...history,
     ];
 
+    const opts = activeCloud
+      ? activeCloud.userConfigurable
+        ? {
+            provider: activeCloud.key,
+            model: activeCloudModel,
+            baseUrl: activeBaseUrl,
+            apiKey: activeApiKey,
+          }
+        : { provider: activeCloud.key, model: activeCloudModel }
+      : { provider: "local" };
+
     try {
-      await invoke<string>("chat", { messages: payload });
+      await invoke<string>("chat", { messages: payload, opts });
     } catch (err) {
       streamingRef.current = false;
       setStreaming(false);
@@ -201,42 +254,169 @@ function App() {
     }
   }
 
-  const sendDisabled = streaming || !input.trim() || !loadedPath;
+  const sendDisabled =
+    streaming ||
+    !input.trim() ||
+    (provider === "local" && !loadedPath) ||
+    (!!activeCloud && !cloudReady);
+
+  const inputDisabled =
+    streaming ||
+    (provider === "local" && !loadedPath) ||
+    (!!activeCloud && !cloudReady);
+
+  const placeholder = streaming
+    ? "Generating..."
+    : provider === "local" && !loadedPath
+      ? "Load a model first..."
+      : activeCloud && !activeCloudModel
+        ? `Set a ${activeCloud.label} model name...`
+        : activeCloud && activeCloud.userConfigurable && !activeBaseUrl
+          ? "Set a base URL..."
+          : "Send a message (Enter to send, Shift+Enter for newline)";
+
+  const headerLabel = activeCloud
+    ? `${activeCloud.key}: ${activeCloudModel || "?"}`
+    : loadedPath
+      ? modelName(loadedPath)
+      : "no model loaded";
 
   return (
     <main className="chat">
       <header className="chat-header">
         <span>rezo</span>
         <span className="model-state" title={loadedPath ?? undefined}>
-          {loadedPath ? modelName(loadedPath) : "no model loaded"}
+          {headerLabel}
         </span>
       </header>
-      <div className="model-row">
-        <input
-          value={modelPath}
-          onChange={(e) => setModelPath(e.currentTarget.value)}
-          placeholder="/path/to/model.gguf"
-          disabled={loading}
-        />
-        <button
-          type="button"
-          onClick={() => browse("file")}
-          disabled={loading}
-          title="Pick a .gguf file"
-        >
-          Browse...
-        </button>
-        <button onClick={loadModel} disabled={loading || !modelPath.trim()}>
-          {loading ? "Loading..." : "Load"}
-        </button>
+      <div className="provider-row">
+        <label>
+          <input
+            type="radio"
+            name="provider"
+            value="local"
+            checked={provider === "local"}
+            onChange={() => setProvider("local")}
+          />
+          Local
+        </label>
+        {cloudProviders.map((p) => (
+          <label key={p.key}>
+            <input
+              type="radio"
+              name="provider"
+              value={p.key}
+              checked={provider === p.key}
+              onChange={() => setProvider(p.key)}
+            />
+            {p.label}
+          </label>
+        ))}
+        {activeCloud && !activeCloud.apiKeySet && (
+          <span className="provider-warn">{activeCloud.envVar} not set</span>
+        )}
       </div>
+      {provider === "local" ? (
+        <div className="model-row">
+          <input
+            value={modelPath}
+            onChange={(e) => setModelPath(e.currentTarget.value)}
+            placeholder="/path/to/model.gguf"
+            disabled={loading}
+          />
+          <button
+            type="button"
+            onClick={() => browse("file")}
+            disabled={loading}
+            title="Pick a .gguf file"
+          >
+            Browse...
+          </button>
+          <button onClick={loadModel} disabled={loading || !modelPath.trim()}>
+            {loading ? "Loading..." : "Load"}
+          </button>
+        </div>
+      ) : activeCloud ? (
+        activeCloud.userConfigurable ? (
+          <div className="model-row model-row-stack">
+            <input
+              value={cloudModel[activeCloud.key] ?? ""}
+              onChange={(e) =>
+                setCloudModel((prev) => ({
+                  ...prev,
+                  [activeCloud.key]: e.currentTarget.value,
+                }))
+              }
+              placeholder="model (e.g. llama3.2, qwen2.5-coder:7b)"
+            />
+            <input
+              value={cloudBaseUrl[activeCloud.key] ?? ""}
+              onChange={(e) =>
+                setCloudBaseUrl((prev) => ({
+                  ...prev,
+                  [activeCloud.key]: e.currentTarget.value,
+                }))
+              }
+              placeholder="base URL (e.g. http://localhost:11434/v1)"
+            />
+            <input
+              type="password"
+              value={cloudApiKey[activeCloud.key] ?? ""}
+              onChange={(e) =>
+                setCloudApiKey((prev) => ({
+                  ...prev,
+                  [activeCloud.key]: e.currentTarget.value,
+                }))
+              }
+              placeholder="API key (optional)"
+            />
+          </div>
+        ) : (
+          <div className="model-row">
+            <select
+              value={
+                activeCloud.recommendedModels.includes(activeCloudModel)
+                  ? activeCloudModel
+                  : "__custom__"
+              }
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                if (v !== "__custom__") {
+                  setCloudModel((prev) => ({ ...prev, [activeCloud.key]: v }));
+                }
+              }}
+            >
+              {activeCloud.recommendedModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+              <option value="__custom__">Custom...</option>
+            </select>
+            <input
+              value={cloudModel[activeCloud.key] ?? ""}
+              onChange={(e) =>
+                setCloudModel((prev) => ({
+                  ...prev,
+                  [activeCloud.key]: e.currentTarget.value,
+                }))
+              }
+              placeholder={activeCloud.defaultModel}
+            />
+          </div>
+        )
+      ) : null}
       {loadError && <div className="load-error">{loadError}</div>}
       <div className="chat-log" ref={scrollRef}>
         {messages.length === 0 && (
           <div className="chat-empty">
-            {loadedPath
-              ? "Send a message to begin."
-              : "Load a model to begin. Point at a Hugging Face-format directory or a .gguf file."}
+            {activeCloud
+              ? activeCloudModel
+                ? "Send a message to begin."
+                : `Enter a ${activeCloud.label} model name to begin.`
+              : loadedPath
+                ? "Send a message to begin."
+                : "Load a model to begin. Point at a .gguf file."}
           </div>
         )}
         {messages.map((m, i) => (
@@ -270,15 +450,9 @@ function App() {
               send();
             }
           }}
-          placeholder={
-            !loadedPath
-              ? "Load a model first..."
-              : streaming
-                ? "Generating..."
-                : "Send a message (Enter to send, Shift+Enter for newline)"
-          }
+          placeholder={placeholder}
           rows={2}
-          disabled={streaming || !loadedPath}
+          disabled={inputDisabled}
         />
         <button type="submit" disabled={sendDisabled}>
           Send
