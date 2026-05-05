@@ -6,6 +6,45 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- Multiple conversations with a left sidebar. Conversations have their own
+  title, system prompt, message history, and timestamps. Sorted most-recent
+  first; rename inline (pencil icon) and delete (trash icon, confirms).
+  All persisted to `localStorage` along with the currently selected
+  conversation id; conversation titles are auto-derived from the first
+  user message.
+- Editable per-conversation system prompt via a collapsible row above the
+  chat log. New conversations seed from `settings.defaultSystemPrompt`.
+- Settings drawer (Settings button in the sidebar) with theme
+  (system/light/dark — applied via `data-theme` on `:root` and CSS
+  variables), font size slider (12–20px, applied via root `font-size`),
+  and default system prompt for new conversations. Persisted to
+  `localStorage`.
+- Copy buttons: per-message (revealed on row hover, copies the raw
+  content) and per-code-block (revealed on `<pre>` hover, reads
+  `pre.innerText` so it strips the highlight markup).
+- Token / timing stats per assistant message. Backend emits a
+  `chat-stats` event before `chat-done`:
+  - Local: exact `promptTokens`, `cachedTokens`, `genTokens`, plus
+    `durationMs` measured from the start of `run_chat_with_cache`.
+  - Cloud: requests `stream_options.include_usage`; uses the final
+    chunk's usage when present, otherwise falls back to a `len/4` char
+    estimate so the row is never blank. Also includes `durationMs`.
+  Rendered as a compact monospace line under each message:
+  `1234 prompt (1100 cached) · 234 gen · 25.0 tok/s · 9.4s · local`.
+- Better banner / error states. Load errors render in a dedicated banner
+  with a dismiss button; chat errors render as a distinct error-styled
+  assistant bubble (monospace, muted-red background) instead of mixing
+  with normal markdown content.
+
+### Changed
+- Frontend split into modules: `types.ts`, `storage.ts`, `Sidebar.tsx`,
+  `SettingsDrawer.tsx`, `MessageBody.tsx` (extracted from `App.tsx`).
+  `App.tsx` is now an orchestrator wiring them together.
+- The whole UI is themed via CSS variables (`--bg`, `--fg`, `--accent`,
+  `--border`, `--code-bg`, etc.) — no more hard-coded `#4a7dff` /
+  `rgba(127,127,127,...)` etc. scattered through `App.css`.
+
+### Added (earlier in this Unreleased)
 - KV cache reuse across turns for the local backend. Each loaded model now
   owns a dedicated worker thread that holds the `LlamaContext` and a
   shadow `Vec<LlamaToken>` of tokens currently in the KV cache. On each

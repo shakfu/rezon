@@ -46,17 +46,26 @@ Working end-to-end on macOS:
 - Each loaded local model gets a dedicated worker thread that holds the
   `LlamaContext` and reuses the KV cache across turns: only the divergent
   suffix of each new prompt is decoded.
+- Multiple conversations with sidebar, per-conversation system prompt,
+  copy-message / copy-code-block buttons, per-message token + timing
+  stats, and a settings drawer (theme, font size, default system prompt).
+  All state is persisted to `localStorage`.
 
 ## Architecture
 
 ```
 src/                    React + Vite frontend
-  App.tsx               Chat UI, model loader, event listeners, markdown render
-  App.css               Styles
+  App.tsx               Orchestrator: state, event listeners, layout
+  App.css               Styles (CSS variables, themed via :root[data-theme])
+  Sidebar.tsx           Conversations list + new/rename/delete + settings
+  SettingsDrawer.tsx    Theme, font size, default system prompt
+  MessageBody.tsx       Markdown + math + code highlighting + copy buttons
+  storage.ts            localStorage wrappers for conversations + settings
+  types.ts              Conversation, Msg, Settings, MsgStats, ...
 src-tauri/src/
   main.rs               Tauri entry point
   lib.rs                Builder, command registration, auto-load on setup
-  llm.rs                LlamaBackend / LlamaModel lifecycle, chat command
+  llm.rs                Worker thread, providers, chat / cancel commands
 ```
 
 Tauri commands exposed to the frontend:

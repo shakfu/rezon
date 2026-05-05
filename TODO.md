@@ -40,14 +40,12 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 
 ## Frontend / UX
 
-- [ ] Persist conversation history across restarts.
-- [ ] Multiple conversations / sidebar.
-- [ ] Editable system prompt (currently a const in `App.tsx`).
-- [ ] Copy-message and copy-code-block buttons.
-- [ ] Token / timing stats (tok/s, prompt vs. gen tokens).
-- [ ] Better empty / error states; the current load-error banner is plain
-      text.
-- [ ] Theme: light mode, font-size control.
+- [ ] Search across conversations.
+- [ ] Export / import conversations as JSON.
+- [ ] Edit / regenerate a previous user message (truncate the conversation
+      to that point and re-send).
+- [ ] Sidebar: collapse / hide. Drag to resize.
+- [ ] Pretty timestamps under each message.
 
 ## Engineering
 

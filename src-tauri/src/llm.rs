@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex as StdMutex};
+use std::time::Instant;
 
 use anyhow::{anyhow, Result};
 use async_openai::{
@@ -9,7 +10,7 @@ use async_openai::{
     types::chat::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
         ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-        CreateChatCompletionRequestArgs,
+        ChatCompletionStreamOptions, CreateChatCompletionRequestArgs,
     },
     Client,
 };
@@ -88,6 +89,16 @@ pub struct ChatMsg {
 pub struct ModelStatus {
     pub loaded: bool,
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStats {
+    pub provider: String,
+    pub prompt_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
+    pub gen_tokens: u32,
+    pub duration_ms: u64,
 }
 
 fn config_file(app: &AppHandle) -> Result<PathBuf> {
@@ -376,7 +387,16 @@ pub async fn chat(
         })
         .ok_or_else(|| "model is required".to_string())?;
 
-    run_cloud_chat(&app, messages, model, api_key, base_url, cancel).await
+    run_cloud_chat(
+        &app,
+        messages,
+        model,
+        api_key,
+        base_url,
+        opts.provider.clone(),
+        cancel,
+    )
+    .await
 }
 
 async fn run_local_chat(
@@ -443,12 +463,18 @@ async fn run_cloud_chat(
     model: String,
     api_key: String,
     base_url: String,
+    provider: String,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    let started = Instant::now();
     let openai_msgs = to_openai_messages(messages)?;
     let request = CreateChatCompletionRequestArgs::default()
         .model(&model)
         .messages(openai_msgs)
+        .stream_options(ChatCompletionStreamOptions {
+            include_usage: Some(true),
+            include_obfuscation: None,
+        })
         .build()
         .map_err(|e| format!("build request: {e}"))?;
 
@@ -464,12 +490,18 @@ async fn run_cloud_chat(
         .map_err(|e| format!("create_stream: {e}"))?;
 
     let mut full = String::new();
+    let mut prompt_tokens: Option<u32> = None;
+    let mut gen_tokens: Option<u32> = None;
     while let Some(result) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
         match result {
             Ok(response) => {
+                if let Some(usage) = response.usage.as_ref() {
+                    prompt_tokens = Some(usage.prompt_tokens);
+                    gen_tokens = Some(usage.completion_tokens);
+                }
                 for choice in response.choices {
                     if let Some(content) = choice.delta.content {
                         if !content.is_empty() {
@@ -483,6 +515,17 @@ async fn run_cloud_chat(
         }
     }
 
+    let stats = ChatStats {
+        provider,
+        prompt_tokens,
+        cached_tokens: None,
+        // Fall back to a rough char-based estimate if the server didn't
+        // return usage (e.g. some OpenAI-compatible servers ignore
+        // `stream_options.include_usage`).
+        gen_tokens: gen_tokens.unwrap_or_else(|| (full.len() as u32).div_ceil(4)),
+        duration_ms: started.elapsed().as_millis() as u64,
+    };
+    let _ = app.emit("chat-stats", &stats);
     let _ = app.emit("chat-done", &full);
     Ok(full)
 }
@@ -545,6 +588,7 @@ fn run_chat_with_cache(
     messages: Vec<ChatMsg>,
     cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    let started = Instant::now();
     let chat_msgs: Vec<LlamaChatMessage> = messages
         .into_iter()
         .map(|m| {
@@ -660,6 +704,14 @@ fn run_chat_with_cache(
         cached.push(token);
     }
 
+    let stats = ChatStats {
+        provider: "local".to_string(),
+        prompt_tokens: Some(prompt_len as u32),
+        cached_tokens: Some(common as u32),
+        gen_tokens: produced as u32,
+        duration_ms: started.elapsed().as_millis() as u64,
+    };
+    let _ = app.emit("chat-stats", &stats);
     let _ = app.emit("chat-done", &full);
     Ok(full)
 }
