@@ -27,6 +27,7 @@ import {
 import { MessageBody, CopyButton } from "./MessageBody";
 import { Sidebar } from "./Sidebar";
 import { SettingsDrawer } from "./SettingsDrawer";
+import { RightSidebar } from "./RightSidebar";
 
 function modelName(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
@@ -129,7 +130,6 @@ function App() {
   const [cloudModel, setCloudModel] = useState<Record<string, string>>({});
   const [cloudBaseUrl, setCloudBaseUrl] = useState<Record<string, string>>({});
   const [cloudApiKey, setCloudApiKey] = useState<Record<string, string>>({});
-  const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const streamingRef = useRef(false);
   const streamingConvIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -387,6 +387,13 @@ function App() {
       <Sidebar
         conversations={conversations}
         currentId={currentId}
+        collapsed={settings.leftSidebarCollapsed}
+        onToggle={() =>
+          setSettings({
+            ...settings,
+            leftSidebarCollapsed: !settings.leftSidebarCollapsed,
+          })
+        }
         onSelect={setCurrentId}
         onNew={newChat}
         onRename={(id, title) => updateConversation(id, (c) => ({ ...c, title }))}
@@ -403,128 +410,6 @@ function App() {
           </span>
         </header>
 
-        <div className="provider-row">
-          <label>
-            <input
-              type="radio"
-              name="provider"
-              value="local"
-              checked={provider === "local"}
-              onChange={() => setProvider("local")}
-            />
-            Local
-          </label>
-          {cloudProviders.map((p) => (
-            <label key={p.key}>
-              <input
-                type="radio"
-                name="provider"
-                value={p.key}
-                checked={provider === p.key}
-                onChange={() => setProvider(p.key)}
-              />
-              {p.label}
-            </label>
-          ))}
-          {activeCloud && !activeCloud.apiKeySet && (
-            <span className="provider-warn">{activeCloud.envVar} not set</span>
-          )}
-        </div>
-
-        {provider === "local" ? (
-          <div className="model-row">
-            <input
-              value={modelPath}
-              onChange={(e) => setModelPath(e.currentTarget.value)}
-              placeholder="/path/to/model.gguf"
-              disabled={loading}
-            />
-            <button
-              type="button"
-              onClick={() => browse("file")}
-              disabled={loading}
-              title="Pick a .gguf file"
-            >
-              Browse...
-            </button>
-            <button onClick={loadModel} disabled={loading || !modelPath.trim()}>
-              {loading ? "Loading..." : "Load"}
-            </button>
-          </div>
-        ) : activeCloud ? (
-          activeCloud.userConfigurable ? (
-            <div className="model-row model-row-stack">
-              <input
-                value={cloudModel[activeCloud.key] ?? ""}
-                onChange={(e) =>
-                  setCloudModel((prev) => ({
-                    ...prev,
-                    [activeCloud.key]: e.currentTarget.value,
-                  }))
-                }
-                placeholder="model (e.g. llama3.2, qwen2.5-coder:7b)"
-              />
-              <input
-                value={cloudBaseUrl[activeCloud.key] ?? ""}
-                onChange={(e) =>
-                  setCloudBaseUrl((prev) => ({
-                    ...prev,
-                    [activeCloud.key]: e.currentTarget.value,
-                  }))
-                }
-                placeholder="base URL (e.g. http://localhost:11434/v1)"
-              />
-              <input
-                type="password"
-                value={cloudApiKey[activeCloud.key] ?? ""}
-                onChange={(e) =>
-                  setCloudApiKey((prev) => ({
-                    ...prev,
-                    [activeCloud.key]: e.currentTarget.value,
-                  }))
-                }
-                placeholder="API key (optional)"
-              />
-            </div>
-          ) : (
-            <div className="model-row">
-              <select
-                value={
-                  activeCloud.recommendedModels.includes(activeCloudModel)
-                    ? activeCloudModel
-                    : "__custom__"
-                }
-                onChange={(e) => {
-                  const v = e.currentTarget.value;
-                  if (v !== "__custom__") {
-                    setCloudModel((prev) => ({
-                      ...prev,
-                      [activeCloud.key]: v,
-                    }));
-                  }
-                }}
-              >
-                {activeCloud.recommendedModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-                <option value="__custom__">Custom...</option>
-              </select>
-              <input
-                value={cloudModel[activeCloud.key] ?? ""}
-                onChange={(e) =>
-                  setCloudModel((prev) => ({
-                    ...prev,
-                    [activeCloud.key]: e.currentTarget.value,
-                  }))
-                }
-                placeholder={activeCloud.defaultModel}
-              />
-            </div>
-          )
-        ) : null}
-
         {loadError && (
           <div className="banner banner-error" role="alert">
             <span className="banner-text">{loadError}</span>
@@ -535,36 +420,6 @@ function App() {
             >
               ×
             </button>
-          </div>
-        )}
-
-        {current && (
-          <div className="system-prompt-row">
-            <button
-              className="system-prompt-toggle"
-              onClick={() => setSystemPromptOpen((v) => !v)}
-            >
-              {systemPromptOpen ? "▾" : "▸"} System prompt
-            </button>
-            {!systemPromptOpen && (
-              <span className="system-prompt-preview" title={current.systemPrompt}>
-                {current.systemPrompt || "(empty)"}
-              </span>
-            )}
-            {systemPromptOpen && (
-              <textarea
-                className="system-prompt-edit"
-                rows={3}
-                value={current.systemPrompt}
-                onChange={(e) =>
-                  updateConversation(current.id, (c) => ({
-                    ...c,
-                    systemPrompt: e.currentTarget.value,
-                  }))
-                }
-                placeholder="Instructions for the assistant for this conversation."
-              />
-            )}
           </div>
         )}
 
@@ -648,6 +503,39 @@ function App() {
           )}
         </form>
       </main>
+      <RightSidebar
+        collapsed={settings.rightSidebarCollapsed}
+        onToggle={() =>
+          setSettings({
+            ...settings,
+            rightSidebarCollapsed: !settings.rightSidebarCollapsed,
+          })
+        }
+        provider={provider}
+        setProvider={setProvider}
+        cloudProviders={cloudProviders}
+        cloudModel={cloudModel}
+        setCloudModel={setCloudModel}
+        cloudBaseUrl={cloudBaseUrl}
+        setCloudBaseUrl={setCloudBaseUrl}
+        cloudApiKey={cloudApiKey}
+        setCloudApiKey={setCloudApiKey}
+        modelPath={modelPath}
+        setModelPath={setModelPath}
+        loadedPath={loadedPath}
+        loading={loading}
+        onBrowseFile={() => browse("file")}
+        onLoadModel={loadModel}
+        current={current}
+        onSystemPromptChange={(value) => {
+          if (current) {
+            updateConversation(current.id, (c) => ({
+              ...c,
+              systemPrompt: value,
+            }));
+          }
+        }}
+      />
       <SettingsDrawer
         open={settingsOpen}
         settings={settings}

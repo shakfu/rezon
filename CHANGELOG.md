@@ -12,8 +12,8 @@ All notable changes to this project. Format loosely follows
   All persisted to `localStorage` along with the currently selected
   conversation id; conversation titles are auto-derived from the first
   user message.
-- Editable per-conversation system prompt via a collapsible row above the
-  chat log. New conversations seed from `settings.defaultSystemPrompt`.
+- Editable per-conversation system prompt in the right sidebar. New
+  conversations seed from `settings.defaultSystemPrompt`.
 - Settings drawer (Settings button in the sidebar) with theme
   (system/light/dark — applied via `data-theme` on `:root` and CSS
   variables), font size slider (12–20px, applied via root `font-size`),
@@ -37,9 +37,17 @@ All notable changes to this project. Format loosely follows
   with normal markdown content.
 
 ### Changed
+- Three-pane layout: left sidebar (conversations + settings), center
+  (chat log + input), right sidebar (provider, model, system prompt).
+  Both sidebars are collapsible (chevron toggle, persisted to settings);
+  collapsed strips show only an expand button (left also keeps a "+"
+  shortcut for new chat). Provider, model row, and the per-conversation
+  system prompt textarea moved out of the chat header into a new
+  `RightSidebar` component. Provider selection is now a single dropdown
+  rather than a radio list.
 - Frontend split into modules: `types.ts`, `storage.ts`, `Sidebar.tsx`,
-  `SettingsDrawer.tsx`, `MessageBody.tsx` (extracted from `App.tsx`).
-  `App.tsx` is now an orchestrator wiring them together.
+  `RightSidebar.tsx`, `SettingsDrawer.tsx`, `MessageBody.tsx` (extracted
+  from `App.tsx`). `App.tsx` is now an orchestrator wiring them together.
 - The whole UI is themed via CSS variables (`--bg`, `--fg`, `--accent`,
   `--border`, `--code-bg`, etc.) — no more hard-coded `#4a7dff` /
   `rgba(127,127,127,...)` etc. scattered through `App.css`.
@@ -80,7 +88,8 @@ All notable changes to this project. Format loosely follows
     LM Studio, or `llama.cpp` `server`. The API key is optional; an empty
     field is sent as `"no-key"` so servers that don't authenticate ignore
     it.
-- Provider radio in the UI now spans Local + the four cloud providers.
+- Provider selector in the UI spans Local + the four cloud providers
+  (later changed to a dropdown — see the [Unreleased] entry above).
   Named providers' cloud row shows a recommended-models dropdown alongside
   a free-text override (the text input is canonical and sent to the
   backend). The `other` row instead stacks three free-text inputs: model,

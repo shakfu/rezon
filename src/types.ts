@@ -42,10 +42,14 @@ export type Settings = {
   theme: Theme;
   fontSize: number;
   defaultSystemPrompt: string;
+  leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   fontSize: 14,
   defaultSystemPrompt: "You are a concise, helpful assistant.",
+  leftSidebarCollapsed: false,
+  rightSidebarCollapsed: false,
 };

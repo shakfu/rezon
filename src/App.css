@@ -88,6 +88,38 @@ button {
 .sidebar-top {
   padding: 10px;
   border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sidebar-collapsed {
+  width: 40px;
+  align-items: center;
+  padding: 8px 0;
+  gap: 6px;
+}
+
+.sidebar-toggle {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-soft);
+  color: var(--fg);
 }
 
 .new-chat {
@@ -243,58 +275,106 @@ button {
   white-space: nowrap;
 }
 
-.provider-row {
+/* ---- Right sidebar ---- */
+
+.right-sidebar {
+  width: 280px;
+  flex: 0 0 auto;
   display: flex;
-  gap: 14px;
-  align-items: center;
-  padding: 8px 12px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--border-soft);
+  flex-direction: column;
+  background: var(--bg-elev);
+  border-left: 1px solid var(--border-soft);
+  overflow-y: auto;
 }
 
-.provider-row label {
+.right-sidebar-collapsed {
+  width: 40px;
+  align-items: center;
+  padding: 8px 0;
+  overflow: visible;
+}
+
+.rs-top {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.rs-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rs-section-grow {
+  flex: 1;
+  border-bottom: none;
+}
+
+.rs-heading {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+.rs-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rs-radio {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  font-size: 13px;
   cursor: pointer;
+  padding: 2px 0;
 }
 
-.provider-warn {
+.rs-warn {
   font-size: 12px;
   color: var(--error);
-  margin-left: auto;
 }
 
-.model-row {
+.rs-stack {
   display: flex;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.model-row-stack {
   flex-direction: column;
+  gap: 6px;
 }
 
-.model-row input,
-.model-row select {
-  flex: 1;
-  padding: 6px 10px;
+.rs-row {
+  display: flex;
+  gap: 6px;
+}
+
+.rs-input {
+  width: 100%;
+  padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: 13px;
+  box-sizing: border-box;
 }
 
-.model-row select {
-  flex: 0 0 auto;
-  min-width: 200px;
+.rs-system-prompt {
+  flex: 1;
+  min-height: 140px;
+  resize: vertical;
+  font-family: inherit;
 }
 
-.model-row button {
-  padding: 0 14px;
+.rs-btn {
+  padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: transparent;
@@ -303,13 +383,23 @@ button {
   font-size: 13px;
 }
 
-.model-row button:hover:not(:disabled) {
+.rs-btn:hover:not(:disabled) {
   background: var(--bg-soft);
 }
 
-.model-row button:disabled {
+.rs-btn-primary {
+  flex: 1;
+}
+
+.rs-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.rs-empty {
+  font-size: 12px;
+  color: var(--fg-dim);
+  font-style: italic;
 }
 
 /* ---- Banners ---- */
@@ -340,58 +430,6 @@ button {
   line-height: 1;
   cursor: pointer;
   padding: 0 4px;
-}
-
-/* ---- System prompt ---- */
-
-.system-prompt-row {
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.system-prompt-row > :first-child {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.system-prompt-toggle {
-  background: transparent;
-  border: none;
-  color: var(--fg-dim);
-  cursor: pointer;
-  padding: 0;
-  font-size: 12px;
-  text-align: left;
-}
-
-.system-prompt-toggle:hover {
-  color: var(--fg);
-}
-
-.system-prompt-preview {
-  font-size: 12px;
-  color: var(--fg-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.system-prompt-edit {
-  width: 100%;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  resize: vertical;
-  box-sizing: border-box;
 }
 
 /* ---- Chat log ---- */

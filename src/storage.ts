@@ -61,6 +61,14 @@ export function loadSettings(): Settings {
         typeof parsed.defaultSystemPrompt === "string"
           ? parsed.defaultSystemPrompt
           : DEFAULT_SETTINGS.defaultSystemPrompt,
+      leftSidebarCollapsed:
+        typeof parsed.leftSidebarCollapsed === "boolean"
+          ? parsed.leftSidebarCollapsed
+          : DEFAULT_SETTINGS.leftSidebarCollapsed,
+      rightSidebarCollapsed:
+        typeof parsed.rightSidebarCollapsed === "boolean"
+          ? parsed.rightSidebarCollapsed
+          : DEFAULT_SETTINGS.rightSidebarCollapsed,
     };
   } catch {
     return DEFAULT_SETTINGS;

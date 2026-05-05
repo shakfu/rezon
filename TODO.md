@@ -44,7 +44,7 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 - [ ] Export / import conversations as JSON.
 - [ ] Edit / regenerate a previous user message (truncate the conversation
       to that point and re-send).
-- [ ] Sidebar: collapse / hide. Drag to resize.
+- [ ] Sidebars: drag to resize (collapse already implemented).
 - [ ] Pretty timestamps under each message.
 
 ## Engineering

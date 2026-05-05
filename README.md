@@ -12,10 +12,10 @@ interchangeable providers:
   entered in the UI. Targets any OpenAI-compatible server — Ollama,
   LM Studio, `llama.cpp` `server`, self-hosted gateways, etc.
 
-The provider is chosen per-message via a radio toggle in the UI. Named
-cloud providers expose a recommended-models dropdown alongside a free-text
-model override; **Other** instead takes model + base URL + API key as free
-text.
+The provider is chosen per-message via a dropdown in the right sidebar.
+Named cloud providers expose a recommended-models dropdown alongside a
+free-text model override; **Other** instead takes model + base URL + API
+key as free text.
 
 ### Cloud providers
 
@@ -46,7 +46,11 @@ Working end-to-end on macOS:
 - Each loaded local model gets a dedicated worker thread that holds the
   `LlamaContext` and reuses the KV cache across turns: only the divergent
   suffix of each new prompt is decoded.
-- Multiple conversations with sidebar, per-conversation system prompt,
+- Three-pane layout: left sidebar (conversations + Settings), center
+  (chat), right sidebar (provider + model + per-conversation system
+  prompt). Both sidebars collapse to a 40px strip; collapsed state is
+  persisted.
+- Multiple conversations with per-conversation system prompt,
   copy-message / copy-code-block buttons, per-message token + timing
   stats, and a settings drawer (theme, font size, default system prompt).
   All state is persisted to `localStorage`.
@@ -57,7 +61,8 @@ Working end-to-end on macOS:
 src/                    React + Vite frontend
   App.tsx               Orchestrator: state, event listeners, layout
   App.css               Styles (CSS variables, themed via :root[data-theme])
-  Sidebar.tsx           Conversations list + new/rename/delete + settings
+  Sidebar.tsx           Left: conversations list + new/rename/delete + settings
+  RightSidebar.tsx      Right: provider, model, per-conversation system prompt
   SettingsDrawer.tsx    Theme, font size, default system prompt
   MessageBody.tsx       Markdown + math + code highlighting + copy buttons
   storage.ts            localStorage wrappers for conversations + settings
@@ -84,7 +89,8 @@ Tauri commands exposed to the frontend:
 Events emitted to the frontend:
 
 - `model-loading`, `model-loaded`, `model-load-error`
-- `chat-token`, `chat-done`
+- `chat-token` (delta string), `chat-stats` (`{ provider, promptTokens?,
+  cachedTokens?, genTokens, durationMs }`), `chat-done` (full string)
 
 ## Defaults
 
@@ -94,7 +100,10 @@ Hard-coded in `src-tauri/src/llm.rs`:
 - `MAX_NEW_TOKENS = 1024`
 - `N_GPU_LAYERS = 999` (offload everything; Metal feature enabled)
 - Sampler chain: `temp(0.7)` then `dist(1234)` (fixed seed)
-- System prompt (frontend, `App.tsx`): "You are a concise, helpful assistant."
+
+The default system prompt for new conversations lives in `DEFAULT_SETTINGS`
+(`src/types.ts`) and can be overridden per-conversation in the right
+sidebar or globally in the Settings drawer.
 
 The model's own chat template (`model.chat_template(None)`) is used to format
 the prompt; models without embedded chat-template metadata will fail to chat.

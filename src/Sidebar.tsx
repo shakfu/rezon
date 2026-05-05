@@ -4,6 +4,8 @@ import { Conversation } from "./types";
 type Props = {
   conversations: Conversation[];
   currentId: string | null;
+  collapsed: boolean;
+  onToggle: () => void;
   onSelect: (id: string) => void;
   onNew: () => void;
   onRename: (id: string, title: string) => void;
@@ -14,12 +16,34 @@ type Props = {
 export function Sidebar({
   conversations,
   currentId,
+  collapsed,
+  onToggle,
   onSelect,
   onNew,
   onRename,
   onDelete,
   onOpenSettings,
 }: Props) {
+  if (collapsed) {
+    return (
+      <aside className="sidebar sidebar-collapsed">
+        <button
+          className="sidebar-toggle"
+          onClick={onToggle}
+          title="Expand sidebar"
+        >
+          »
+        </button>
+        <button
+          className="sidebar-toggle"
+          onClick={onNew}
+          title="New chat"
+        >
+          +
+        </button>
+      </aside>
+    );
+  }
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
 
@@ -43,6 +67,13 @@ export function Sidebar({
       <div className="sidebar-top">
         <button className="new-chat" onClick={onNew}>
           + New chat
+        </button>
+        <button
+          className="sidebar-toggle"
+          onClick={onToggle}
+          title="Collapse sidebar"
+        >
+          «
         </button>
       </div>
       <ul className="conv-list">
