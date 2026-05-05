@@ -1,3 +1,4 @@
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { CloudProviderInfo, Conversation } from "./types";
 
 type Props = {
@@ -61,13 +62,19 @@ export function RightSidebar(props: Props) {
   if (collapsed) {
     return (
       <aside className="right-sidebar right-sidebar-collapsed">
-        <button
-          className="sidebar-toggle"
-          onClick={onToggle}
-          title="Expand sidebar"
-        >
-          «
-        </button>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <button className="sidebar-toggle" onClick={onToggle}>
+              «
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="tooltip" side="left" sideOffset={6}>
+              Expand sidebar
+              <Tooltip.Arrow className="tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
       </aside>
     );
   }
@@ -75,13 +82,19 @@ export function RightSidebar(props: Props) {
   return (
     <aside className="right-sidebar">
       <div className="rs-top">
-        <button
-          className="sidebar-toggle"
-          onClick={onToggle}
-          title="Collapse sidebar"
-        >
-          »
-        </button>
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <button className="sidebar-toggle" onClick={onToggle}>
+              »
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="tooltip" side="left" sideOffset={6}>
+              Collapse sidebar
+              <Tooltip.Arrow className="tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
       </div>
       <section className="rs-section">
         <h3 className="rs-heading">Provider</h3>

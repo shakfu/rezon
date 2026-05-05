@@ -41,8 +41,12 @@ Working end-to-end on macOS:
 - Assistant messages render as Markdown (GFM), with KaTeX math (`$...$`,
   `$$...$$`, plus `\(...\)` / `\[...\]` normalized to dollar delimiters) and
   syntax-highlighted code blocks (highlight.js, github-dark).
-- Model and backend are torn down cleanly on app exit to avoid races with
-  ggml-metal C++ static destructors.
+- Model and backend are torn down cleanly on app exit. `LoadedHandle::Drop`
+  closes the worker channel and joins the thread before returning; only
+  then is the `Arc<LlamaBackend>` released. This guarantees the
+  `LlamaContext` and its KV-cache buffers are gone before C++ static
+  destructors run on the metal device — the alternative is the
+  `GGML_ASSERT([rsets->data count] == 0)` crash inside `__cxa_finalize`.
 - Each loaded local model gets a dedicated worker thread that holds the
   `LlamaContext` and reuses the KV cache across turns: only the divergent
   suffix of each new prompt is decoded.
@@ -63,7 +67,7 @@ src/                    React + Vite frontend
   App.css               Styles (CSS variables, themed via :root[data-theme])
   Sidebar.tsx           Left: conversations list + new/rename/delete + settings
   RightSidebar.tsx      Right: provider, model, per-conversation system prompt
-  SettingsDrawer.tsx    Theme, font size, default system prompt
+  SettingsDrawer.tsx    Theme, font size, default system prompt (Radix Dialog)
   MessageBody.tsx       Markdown + math + code highlighting + copy buttons
   storage.ts            localStorage wrappers for conversations + settings
   types.ts              Conversation, Msg, Settings, MsgStats, ...

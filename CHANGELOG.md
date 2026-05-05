@@ -5,6 +5,23 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- Crash on app close inside `__cxa_finalize` →
+  `ggml_metal_device_free` →
+  `GGML_ASSERT([rsets->data count] == 0) failed`. Cause: the worker
+  thread refactor for KV-cache reuse stored only the `mpsc::Sender`
+  in `LoadedHandle` and discarded the `JoinHandle`, so on
+  `RunEvent::Exit` we'd close the channel and immediately return —
+  the worker (and its `LlamaContext`) could still be alive when C++
+  static destructors ran on the main thread, leaving live resource
+  sets on the metal device. Fix: `LoadedHandle` now stores
+  `Option<JoinHandle>` and its `Drop` impl closes the channel and
+  joins the worker before returning. `LlmState::shutdown` also flips
+  the cancel flag so an in-flight chat aborts immediately rather
+  than running to `MAX_NEW_TOKENS`. Same join-on-drop also runs on
+  model swap, so the previous model's worker is fully torn down
+  before the new one takes over.
+
 ### Added
 - Multiple conversations with a left sidebar. Conversations have their own
   title, system prompt, message history, and timestamps. Sorted most-recent
@@ -37,6 +54,16 @@ All notable changes to this project. Format loosely follows
   with normal markdown content.
 
 ### Changed
+- Adopted Radix UI primitives for the bits where accessibility matters
+  most: `@radix-ui/react-dialog` powers the SettingsDrawer (focus trap,
+  ESC-to-close, scroll lock, portal, ARIA), `@radix-ui/react-alert-dialog`
+  replaces the native `confirm()` on conversation delete, and
+  `@radix-ui/react-tooltip` (wrapped in a top-level `Tooltip.Provider`)
+  labels icon-only buttons (sidebar collapse/expand, "+" new chat in the
+  collapsed left strip). The primitives are unstyled — CSS lives in
+  `App.css` keyed off Radix's `data-state` attributes for fade/pop
+  animations. No styling-framework migration: still vanilla CSS + CSS
+  variables.
 - Three-pane layout: left sidebar (conversations + settings), center
   (chat log + input), right sidebar (provider, model, system prompt).
   Both sidebars are collapsible (chevron toggle, persisted to settings);

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { Conversation } from "./types";
 
 type Props = {
@@ -13,6 +15,29 @@ type Props = {
   onOpenSettings: () => void;
 };
 
+function IconButton({
+  label,
+  children,
+  ...rest
+}: {
+  label: string;
+  children: React.ReactNode;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <button {...rest}>{children}</button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="tooltip" side="right" sideOffset={6}>
+          {label}
+          <Tooltip.Arrow className="tooltip-arrow" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
 export function Sidebar({
   conversations,
   currentId,
@@ -24,28 +49,9 @@ export function Sidebar({
   onDelete,
   onOpenSettings,
 }: Props) {
-  if (collapsed) {
-    return (
-      <aside className="sidebar sidebar-collapsed">
-        <button
-          className="sidebar-toggle"
-          onClick={onToggle}
-          title="Expand sidebar"
-        >
-          »
-        </button>
-        <button
-          className="sidebar-toggle"
-          onClick={onNew}
-          title="New chat"
-        >
-          +
-        </button>
-      </aside>
-    );
-  }
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
 
   const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
 
@@ -62,19 +68,40 @@ export function Sidebar({
     setRenamingId(null);
   }
 
+  if (collapsed) {
+    return (
+      <aside className="sidebar sidebar-collapsed">
+        <IconButton
+          label="Expand sidebar"
+          className="sidebar-toggle"
+          onClick={onToggle}
+        >
+          »
+        </IconButton>
+        <IconButton
+          label="New chat"
+          className="sidebar-toggle"
+          onClick={onNew}
+        >
+          +
+        </IconButton>
+      </aside>
+    );
+  }
+
   return (
     <aside className="sidebar">
       <div className="sidebar-top">
         <button className="new-chat" onClick={onNew}>
           + New chat
         </button>
-        <button
+        <IconButton
+          label="Collapse sidebar"
           className="sidebar-toggle"
           onClick={onToggle}
-          title="Collapse sidebar"
         >
           «
-        </button>
+        </IconButton>
       </div>
       <ul className="conv-list">
         {sorted.map((c) => {
@@ -109,7 +136,10 @@ export function Sidebar({
                 </span>
               )}
               {!isRenaming && (
-                <span className="conv-actions" onClick={(e) => e.stopPropagation()}>
+                <span
+                  className="conv-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button
                     className="conv-action"
                     title="Rename"
@@ -120,9 +150,7 @@ export function Sidebar({
                   <button
                     className="conv-action conv-delete"
                     title="Delete"
-                    onClick={() => {
-                      if (confirm(`Delete "${c.title}"?`)) onDelete(c.id);
-                    }}
+                    onClick={() => setPendingDelete(c)}
                   >
                     del
                   </button>
@@ -140,6 +168,39 @@ export function Sidebar({
           Settings
         </button>
       </div>
+
+      <AlertDialog.Root
+        open={!!pendingDelete}
+        onOpenChange={(v) => !v && setPendingDelete(null)}
+      >
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="dialog-overlay" />
+          <AlertDialog.Content className="dialog dialog-alert">
+            <AlertDialog.Title className="dialog-title">
+              Delete conversation?
+            </AlertDialog.Title>
+            <AlertDialog.Description className="dialog-desc">
+              "{pendingDelete?.title}" will be removed. This can't be undone.
+            </AlertDialog.Description>
+            <div className="dialog-actions">
+              <AlertDialog.Cancel asChild>
+                <button className="rs-btn">Cancel</button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action asChild>
+                <button
+                  className="rs-btn rs-btn-danger"
+                  onClick={() => {
+                    if (pendingDelete) onDelete(pendingDelete.id);
+                    setPendingDelete(null);
+                  }}
+                >
+                  Delete
+                </button>
+              </AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
     </aside>
   );
 }

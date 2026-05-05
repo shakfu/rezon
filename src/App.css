@@ -647,32 +647,53 @@ button {
   background: var(--error);
 }
 
-/* ---- Settings drawer ---- */
+/* ---- Dialogs (Radix) ---- */
 
-.drawer-overlay {
+.dialog-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  justify-content: center;
-  align-items: center;
   z-index: 100;
+  animation: dialog-fade-in 120ms ease-out;
 }
 
-.drawer {
+.dialog-overlay[data-state="closed"] {
+  animation: dialog-fade-out 100ms ease-in;
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   background: var(--bg-elev);
   color: var(--fg);
   border-radius: 8px;
   border: 1px solid var(--border);
-  width: 420px;
   max-width: 90vw;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  z-index: 101;
+  animation: dialog-pop-in 140ms ease-out;
 }
 
-.drawer-header {
+.dialog[data-state="closed"] {
+  animation: dialog-pop-out 100ms ease-in;
+}
+
+.dialog-settings {
+  width: 420px;
+}
+
+.dialog-alert {
+  width: 360px;
+  padding: 16px 18px;
+  gap: 10px;
+}
+
+.dialog-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -680,12 +701,20 @@ button {
   border-bottom: 1px solid var(--border-soft);
 }
 
-.drawer-header h2 {
+.dialog-title {
   margin: 0;
   font-size: 1.05em;
+  font-weight: 600;
 }
 
-.drawer-close {
+.dialog-desc {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dialog-close {
   background: transparent;
   border: none;
   color: inherit;
@@ -695,12 +724,85 @@ button {
   padding: 0 4px;
 }
 
-.drawer-body {
+.dialog-body {
   padding: 14px 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.rs-btn-danger {
+  background: var(--error);
+  color: white;
+  border-color: var(--error);
+}
+
+.rs-btn-danger:hover:not(:disabled) {
+  filter: brightness(1.05);
+  background: var(--error);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes dialog-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialog-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes dialog-pop-in {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes dialog-pop-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+}
+
+/* ---- Tooltip (Radix) ---- */
+
+.tooltip {
+  background: var(--fg);
+  color: var(--bg);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+  z-index: 200;
+  animation: tooltip-fade 100ms ease-out;
+}
+
+.tooltip-arrow {
+  fill: var(--fg);
+}
+
+@keyframes tooltip-fade {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .setting {

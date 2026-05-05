@@ -49,11 +49,18 @@ impl LlmState {
     }
 
     pub fn shutdown(&self) {
-        // Drop the worker (which holds the model + context) first, then the
-        // backend. Dropping the sender closes the channel; the worker thread
-        // exits and releases the model + context before we tear down the
-        // backend / ggml-metal devices.
+        // Order matters here: ggml-metal's process-exit destructor (run via
+        // __cxa_finalize after main returns) asserts that no resource sets
+        // are alive on the metal device. If the worker thread is still
+        // holding a LlamaContext at that point, its KV-cache buffers are
+        // registered against the device and the assert fires. So we must
+        // (a) signal any in-flight chat to abort, (b) drop the loaded
+        // handle and *join* the worker thread before returning, and only
+        // then (c) drop the backend Arc.
+        self.cancel.store(true, Ordering::Relaxed);
         if let Ok(mut g) = self.loaded.lock() {
+            // Dropping the LoadedHandle closes the channel and joins the
+            // worker thread (see Drop impl).
             *g = None;
         }
         if let Ok(mut g) = self.backend.lock() {
@@ -62,12 +69,32 @@ impl LlmState {
     }
 }
 
-// A handle to the per-model worker thread. Dropping `sender` closes the
-// channel; the worker observes that and exits, releasing the LlamaContext
-// and LlamaModel it owns.
+// A handle to the per-model worker thread. Dropping closes the channel
+// (waking the worker if it's idle on rx.recv) and then joins the thread,
+// guaranteeing the LlamaContext + LlamaModel + the worker's Arc clone of
+// LlamaBackend are all released before this drop returns.
 struct LoadedHandle {
     path: String,
-    sender: mpsc::Sender<WorkerRequest>,
+    sender: Option<mpsc::Sender<WorkerRequest>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LoadedHandle {
+    fn drop(&mut self) {
+        // Step 1: drop the sender to close the channel. If the worker is
+        // idle (blocked on rx.recv) it returns Err and the loop exits. If
+        // the worker is mid-chat it will see the cancel flag (set by
+        // LlmState::shutdown or by chat() before each new request) and
+        // bail out of the generation loop, then loop back to rx.recv,
+        // which now also returns Err.
+        self.sender.take();
+        // Step 2: wait for the worker thread to actually finish, so its
+        // LlamaContext (and the metal buffers behind its KV cache) are
+        // gone before this function returns.
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
 }
 
 enum WorkerRequest {
@@ -147,14 +174,21 @@ pub async fn do_load(app: &AppHandle, path: String) -> Result<ModelStatus, Strin
     .map_err(|e| e.to_string())??;
 
     let model = Arc::new(model);
-    let sender = spawn_worker(model, backend);
+    let (sender, join) = spawn_worker(model, backend);
+    // Tell the previous worker (if any) to abort an in-flight chat so we
+    // don't block here for up to MAX_NEW_TOKENS while it finishes. The
+    // next chat() resets the flag to false before dispatching.
+    state.cancel.store(true, Ordering::Relaxed);
     {
         let mut guard = state.loaded.lock().unwrap();
-        // Replacing drops the previous handle (and its sender), which causes
-        // the previous worker thread to exit and release its context + model.
+        // Replacing drops the previous LoadedHandle, whose Drop impl closes
+        // the channel and joins the previous worker thread before this
+        // assignment returns. So the previous model + context are fully
+        // released before the new worker takes over.
         *guard = Some(LoadedHandle {
             path: path.clone(),
-            sender,
+            sender: Some(sender),
+            join: Some(join),
         });
     }
     persist_last_model(app, &path);
@@ -411,6 +445,8 @@ async fn run_local_chat(
             .as_ref()
             .ok_or_else(|| "no model loaded".to_string())?
             .sender
+            .as_ref()
+            .ok_or_else(|| "model worker exited".to_string())?
             .clone()
     };
 
@@ -533,10 +569,10 @@ async fn run_cloud_chat(
 fn spawn_worker(
     model: Arc<LlamaModel>,
     backend: Arc<LlamaBackend>,
-) -> mpsc::Sender<WorkerRequest> {
+) -> (mpsc::Sender<WorkerRequest>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<WorkerRequest>();
-    std::thread::spawn(move || worker_loop(model, backend, rx));
-    tx
+    let join = std::thread::spawn(move || worker_loop(model, backend, rx));
+    (tx, join)
 }
 
 fn worker_loop(

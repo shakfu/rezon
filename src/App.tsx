@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import "./App.css";
@@ -383,8 +384,9 @@ function App() {
       : "no model loaded";
 
   return (
-    <div className="app">
-      <Sidebar
+    <Tooltip.Provider delayDuration={300} skipDelayDuration={150}>
+      <div className="app">
+        <Sidebar
         conversations={conversations}
         currentId={currentId}
         collapsed={settings.leftSidebarCollapsed}
@@ -536,13 +538,14 @@ function App() {
           }
         }}
       />
-      <SettingsDrawer
-        open={settingsOpen}
-        settings={settings}
-        onChange={setSettings}
-        onClose={() => setSettingsOpen(false)}
-      />
-    </div>
+        <SettingsDrawer
+          open={settingsOpen}
+          settings={settings}
+          onChange={setSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </div>
+    </Tooltip.Provider>
   );
 }
 

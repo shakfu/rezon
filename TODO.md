@@ -29,7 +29,9 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
       hard-coded constants in `llm.rs`).
 - [ ] Surface load progress / mmap status; `model-loading` only carries the
       path.
-- [ ] Unload / swap model without restarting the app.
+- [ ] UI affordance to unload the current local model (swap already works:
+      `do_load` drops the previous `LoadedHandle` which closes the
+      channel + joins the worker thread).
 - [ ] Graceful error when the model has no embedded chat-template metadata
       (today it just bubbles up as a string).
 - [ ] Handle prompts that overflow `n_ctx` (truncate history vs. error).
@@ -50,6 +52,11 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 ## Engineering
 
 - [ ] Actual Rust tests (`make test` runs `cargo test` but `llm.rs` has none).
+      In particular: a regression test that loading + dropping a model
+      releases the metal device cleanly (the
+      `GGML_ASSERT([rsets->data count] == 0)` crash that bit us on close).
+      Probably needs a tiny GGUF fixture and a dedicated thread to host
+      `LlamaContext`.
 - [ ] Frontend tests / typecheck in CI.
 - [ ] CI workflow (fmt-check, clippy, cargo test, vite build).
 - [ ] Replace `eprintln!` with structured logging (`tracing`).
