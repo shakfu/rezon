@@ -1,6 +1,6 @@
 import { useState } from "react";
-import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import * as Tooltip from "@radix-ui/react-tooltip";
+import { AlertDialog } from "@base-ui/react/alert-dialog";
+import { Tooltip } from "@base-ui/react/tooltip";
 import { Conversation } from "./types";
 
 type Props = {
@@ -15,24 +15,43 @@ type Props = {
   onOpenSettings: () => void;
 };
 
-function IconButton({
+const SIDEBAR_BTN =
+  "w-7 h-7 flex items-center justify-center rounded-md border border-border bg-transparent text-fg-dim hover:bg-bg-soft hover:text-fg cursor-pointer text-sm leading-none";
+
+const FULL_BTN =
+  "w-full rounded-md border border-border bg-transparent px-2.5 py-2 text-left text-[13px] text-fg cursor-pointer hover:bg-bg-soft";
+
+const ALERT_BTN =
+  "rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[13px] text-fg cursor-pointer hover:bg-bg-soft";
+
+const TOOLTIP_POPUP =
+  "tooltip z-[200] select-none rounded bg-fg px-2 py-1 text-[11px] leading-none text-bg";
+
+function TooltippedButton({
   label,
+  side = "right",
+  className,
+  onClick,
   children,
-  ...rest
 }: {
   label: string;
+  side?: "left" | "right" | "top" | "bottom";
+  className: string;
+  onClick: () => void;
   children: React.ReactNode;
-} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}) {
   return (
     <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        <button {...rest}>{children}</button>
+      <Tooltip.Trigger className={className} onClick={onClick}>
+        {children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content className="tooltip" side="right" sideOffset={6}>
-          {label}
-          <Tooltip.Arrow className="tooltip-arrow" />
-        </Tooltip.Content>
+        <Tooltip.Positioner side={side} sideOffset={6}>
+          <Tooltip.Popup className={TOOLTIP_POPUP}>
+            {label}
+            <Tooltip.Arrow className="fill-fg" />
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
       </Tooltip.Portal>
     </Tooltip.Root>
   );
@@ -70,52 +89,55 @@ export function Sidebar({
 
   if (collapsed) {
     return (
-      <aside className="sidebar sidebar-collapsed">
-        <IconButton
+      <aside className="flex w-10 flex-col items-center gap-1.5 border-r border-border-soft bg-bg-elev py-2">
+        <TooltippedButton
           label="Expand sidebar"
-          className="sidebar-toggle"
+          className={SIDEBAR_BTN}
           onClick={onToggle}
         >
           »
-        </IconButton>
-        <IconButton
+        </TooltippedButton>
+        <TooltippedButton
           label="New chat"
-          className="sidebar-toggle"
+          className={SIDEBAR_BTN}
           onClick={onNew}
         >
           +
-        </IconButton>
+        </TooltippedButton>
       </aside>
     );
   }
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-top">
-        <button className="new-chat" onClick={onNew}>
+    <aside className="flex w-60 flex-col border-r border-border-soft bg-bg-elev">
+      <div className="flex items-center gap-1.5 border-b border-border-soft p-2.5">
+        <button className={FULL_BTN} onClick={onNew}>
           + New chat
         </button>
-        <IconButton
+        <TooltippedButton
           label="Collapse sidebar"
-          className="sidebar-toggle"
+          className={SIDEBAR_BTN}
           onClick={onToggle}
         >
           «
-        </IconButton>
+        </TooltippedButton>
       </div>
-      <ul className="conv-list">
+
+      <ul className="flex-1 list-none overflow-y-auto p-1.5 m-0">
         {sorted.map((c) => {
           const isCurrent = c.id === currentId;
           const isRenaming = renamingId === c.id;
           return (
             <li
               key={c.id}
-              className={`conv-item${isCurrent ? " current" : ""}`}
+              className={`group relative flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-fg cursor-pointer hover:bg-bg-soft ${
+                isCurrent ? "bg-accent-soft" : ""
+              }`}
               onClick={() => !isRenaming && onSelect(c.id)}
             >
               {isRenaming ? (
                 <input
-                  className="conv-rename"
+                  className="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-fg outline-none"
                   autoFocus
                   value={renameDraft}
                   onChange={(e) => setRenameDraft(e.currentTarget.value)}
@@ -131,24 +153,27 @@ export function Sidebar({
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="conv-title" title={c.title}>
+                <span
+                  className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+                  title={c.title}
+                >
                   {c.title || "Untitled"}
                 </span>
               )}
               {!isRenaming && (
                 <span
-                  className="conv-actions"
+                  className="hidden gap-0.5 group-hover:inline-flex"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
-                    className="conv-action"
+                    className="cursor-pointer rounded border-none bg-transparent px-1.5 py-0.5 text-[11px] text-fg-dim hover:bg-bg-soft hover:text-fg"
                     title="Rename"
                     onClick={() => startRename(c)}
                   >
                     edit
                   </button>
                   <button
-                    className="conv-action conv-delete"
+                    className="cursor-pointer rounded border-none bg-transparent px-1.5 py-0.5 text-[11px] text-fg-dim hover:bg-bg-soft hover:text-danger"
                     title="Delete"
                     onClick={() => setPendingDelete(c)}
                   >
@@ -160,11 +185,14 @@ export function Sidebar({
           );
         })}
         {sorted.length === 0 && (
-          <li className="conv-empty">No conversations yet.</li>
+          <li className="p-2.5 text-[12px] italic text-fg-dim">
+            No conversations yet.
+          </li>
         )}
       </ul>
-      <div className="sidebar-bottom">
-        <button className="settings-btn" onClick={onOpenSettings}>
+
+      <div className="border-t border-border-soft p-2.5">
+        <button className={FULL_BTN} onClick={onOpenSettings}>
           Settings
         </button>
       </div>
@@ -174,31 +202,29 @@ export function Sidebar({
         onOpenChange={(v) => !v && setPendingDelete(null)}
       >
         <AlertDialog.Portal>
-          <AlertDialog.Overlay className="dialog-overlay" />
-          <AlertDialog.Content className="dialog dialog-alert">
-            <AlertDialog.Title className="dialog-title">
+          <AlertDialog.Backdrop className="dialog-overlay fixed inset-0 z-[100] bg-black/40" />
+          <AlertDialog.Popup className="dialog fixed top-1/2 left-1/2 z-[101] flex w-[360px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2.5 rounded-lg border border-border bg-bg-elev p-4 text-fg shadow-[0_20px_60px_rgba(0,0,0,0.4)]">
+            <AlertDialog.Title className="m-0 text-[1.05em] font-semibold">
               Delete conversation?
             </AlertDialog.Title>
-            <AlertDialog.Description className="dialog-desc">
+            <AlertDialog.Description className="m-0 text-[13px] leading-snug text-fg-dim">
               "{pendingDelete?.title}" will be removed. This can't be undone.
             </AlertDialog.Description>
-            <div className="dialog-actions">
-              <AlertDialog.Cancel asChild>
-                <button className="rs-btn">Cancel</button>
-              </AlertDialog.Cancel>
-              <AlertDialog.Action asChild>
-                <button
-                  className="rs-btn rs-btn-danger"
-                  onClick={() => {
-                    if (pendingDelete) onDelete(pendingDelete.id);
-                    setPendingDelete(null);
-                  }}
-                >
-                  Delete
-                </button>
-              </AlertDialog.Action>
+            <div className="mt-1.5 flex justify-end gap-2">
+              <AlertDialog.Close className={ALERT_BTN}>
+                Cancel
+              </AlertDialog.Close>
+              <AlertDialog.Close
+                className="cursor-pointer rounded-md border border-danger bg-danger px-2.5 py-1.5 text-[13px] text-white hover:brightness-105"
+                onClick={() => {
+                  if (pendingDelete) onDelete(pendingDelete.id);
+                  setPendingDelete(null);
+                }}
+              >
+                Delete
+              </AlertDialog.Close>
             </div>
-          </AlertDialog.Content>
+          </AlertDialog.Popup>
         </AlertDialog.Portal>
       </AlertDialog.Root>
     </aside>

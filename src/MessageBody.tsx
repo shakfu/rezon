@@ -25,12 +25,25 @@ function normalizeMathDelimiters(src: string): string {
     .join("");
 }
 
-function CopyButton({ getText, label = "Copy" }: { getText: () => string; label?: string }) {
+const COPY_BTN =
+  "rounded border border-border bg-bg-elev px-2 py-0.5 text-[11px] text-fg cursor-pointer hover:bg-bg-soft";
+
+function CopyButton({
+  getText,
+  label = "Copy",
+  className = "",
+}: {
+  getText: () => string;
+  label?: string;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
-      className={`copy-btn${copied ? " copied" : ""}`}
+      className={`${COPY_BTN} ${
+        copied ? "text-accent border-accent" : ""
+      } ${className}`}
       onClick={() => {
         const text = getText();
         if (!text) return;
@@ -61,16 +74,18 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 export function MessageBody({ content }: { content: string }) {
   const prepared = closeOpenFences(normalizeMathDelimiters(content));
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[
-        rehypeKatex,
-        [rehypeHighlight, { detect: true, ignoreMissing: true }],
-      ]}
-      components={{ pre: CodeBlock }}
-    >
-      {prepared}
-    </ReactMarkdown>
+    <div className="md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[
+          rehypeKatex,
+          [rehypeHighlight, { detect: true, ignoreMissing: true }],
+        ]}
+        components={{ pre: CodeBlock }}
+      >
+        {prepared}
+      </ReactMarkdown>
+    </div>
   );
 }
 

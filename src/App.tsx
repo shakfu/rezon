@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import * as Tooltip from "@radix-ui/react-tooltip";
+import { Tooltip } from "@base-ui/react/tooltip";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import "./App.css";
@@ -384,8 +384,8 @@ function App() {
       : "no model loaded";
 
   return (
-    <Tooltip.Provider delayDuration={300} skipDelayDuration={150}>
-      <div className="app">
+    <Tooltip.Provider delay={300} timeout={150}>
+      <div className="flex h-screen">
         <Sidebar
         conversations={conversations}
         currentId={currentId}
@@ -402,21 +402,30 @@ function App() {
         onDelete={deleteConversation}
         onOpenSettings={() => setSettingsOpen(true)}
       />
-      <main className="chat">
-        <header className="chat-header">
-          <span className="chat-title" title={current?.title}>
+      <main className="flex h-screen min-w-0 flex-1 flex-col">
+        <header className="flex items-baseline justify-between gap-3 border-b border-border-soft px-4 py-3 font-semibold">
+          <span
+            className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+            title={current?.title}
+          >
             {current?.title ?? "rezo"}
           </span>
-          <span className="model-state" title={loadedPath ?? undefined}>
+          <span
+            className="overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-normal opacity-60"
+            title={loadedPath ?? undefined}
+          >
             {headerLabel}
           </span>
         </header>
 
         {loadError && (
-          <div className="banner banner-error" role="alert">
-            <span className="banner-text">{loadError}</span>
+          <div
+            className="flex items-start gap-2 whitespace-pre-wrap bg-danger-soft px-3 py-2 text-[12px] text-danger"
+            role="alert"
+          >
+            <span className="flex-1">{loadError}</span>
             <button
-              className="banner-dismiss"
+              className="cursor-pointer border-none bg-transparent px-1 text-base leading-none text-inherit"
               onClick={() => setLoadError(null)}
               aria-label="Dismiss"
             >
@@ -425,9 +434,12 @@ function App() {
           </div>
         )}
 
-        <div className="chat-log" ref={scrollRef}>
+        <div
+          className="flex flex-1 flex-col gap-3.5 overflow-y-auto p-4"
+          ref={scrollRef}
+        >
           {current && current.messages.length === 0 && (
-            <div className="chat-empty">
+            <div className="mt-10 text-center opacity-60">
               {activeCloud
                 ? activeCloudModel
                   ? "Send a message to begin."
@@ -437,45 +449,63 @@ function App() {
                   : "Load a model to begin. Point at a .gguf file."}
             </div>
           )}
-          {current?.messages.map((m, i) => (
-            <div
-              key={i}
-              className={`msg msg-${m.role}${m.isError ? " msg-error" : ""}`}
-            >
-              <div className="msg-role">
-                <span>{m.role}</span>
-                {m.content && (
-                  <CopyButton getText={() => m.content} label="Copy" />
-                )}
-              </div>
-              <div className="msg-content">
-                {m.content ? (
-                  m.isError ? (
-                    <pre className="error-text">{m.content}</pre>
+          {current?.messages.map((m, i) => {
+            const isUser = m.role === "user";
+            const isError = !!m.isError;
+            return (
+              <div key={i} className="group flex flex-col gap-1">
+                <div className="flex items-center justify-between text-[11px] uppercase tracking-wider opacity-55">
+                  <span>{m.role}</span>
+                  {m.content && (
+                    <CopyButton
+                      className="opacity-0 transition-opacity group-hover:opacity-100 normal-case tracking-normal"
+                      getText={() => m.content}
+                      label="Copy"
+                    />
+                  )}
+                </div>
+                <div
+                  className={`overflow-x-auto rounded-lg px-3 py-2.5 leading-snug ${
+                    isError
+                      ? "bg-danger-soft text-danger"
+                      : isUser
+                        ? "whitespace-pre-wrap bg-accent-soft"
+                        : "bg-bg-soft"
+                  }`}
+                >
+                  {m.content ? (
+                    isError ? (
+                      <pre className="m-0 whitespace-pre-wrap font-mono text-[0.9em]">
+                        {m.content}
+                      </pre>
+                    ) : (
+                      <MessageBody content={m.content} />
+                    )
+                  ) : streaming && i === current.messages.length - 1 ? (
+                    <span className="dot-pulse inline-block">…</span>
                   ) : (
-                    <MessageBody content={m.content} />
-                  )
-                ) : streaming && i === current.messages.length - 1 ? (
-                  <span className="dot-pulse">…</span>
-                ) : (
-                  ""
+                    ""
+                  )}
+                </div>
+                {m.stats && (
+                  <div className="font-mono text-[11px] text-fg-dim">
+                    {formatStats(m.stats)}
+                  </div>
                 )}
               </div>
-              {m.stats && (
-                <div className="msg-stats">{formatStats(m.stats)}</div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <form
-          className="chat-input"
+          className="flex gap-2 border-t border-border-soft p-3"
           onSubmit={(e) => {
             e.preventDefault();
             send();
           }}
         >
           <textarea
+            className="flex-1 resize-none rounded-md border border-border bg-transparent px-2.5 py-2 font-[inherit] text-fg outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
             value={input}
             onChange={(e) => setInput(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -491,7 +521,7 @@ function App() {
           {streaming ? (
             <button
               type="button"
-              className="stop"
+              className="cursor-pointer rounded-md border-none bg-danger px-4.5 font-semibold text-white"
               onClick={() => {
                 invoke("cancel_chat").catch(() => {});
               }}
@@ -499,7 +529,11 @@ function App() {
               Stop
             </button>
           ) : (
-            <button type="submit" disabled={sendDisabled}>
+            <button
+              type="submit"
+              className="cursor-pointer rounded-md border-none bg-accent px-4.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={sendDisabled}
+            >
               Send
             </button>
           )}

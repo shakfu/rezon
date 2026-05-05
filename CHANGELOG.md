@@ -5,7 +5,51 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- Migrated all headless-component usage from Radix
+  (`@radix-ui/react-dialog`, `@radix-ui/react-alert-dialog`,
+  `@radix-ui/react-tooltip`) to [Base UI](https://base-ui.com)
+  (`@base-ui/react@1.4.1`), the consolidation effort by the same
+  authors. Single dep, consistent API. Component name shifts:
+  Radix `Overlay` → Base UI `Backdrop`; `Content` → `Popup`; Tooltip
+  needs an extra `Positioner` wrapper between `Portal` and `Popup`.
+  `Tooltip.Provider` props renamed (`delayDuration` →
+  `delay`, `skipDelayDuration` → `timeout`). `Tooltip.Trigger` no
+  longer needs `asChild` — it renders a `<button>` itself, so
+  `className`/`onClick` go directly on the trigger.
+- Provider and Theme native `<select>` elements replaced with Base UI
+  `Select` for visual consistency with the rest of the
+  themed/Base-UI-styled UI (no more OS-default chevron jumping out
+  against the rest of the app). New shared wrapper at `src/Select.tsx`
+  used by both the right-sidebar Provider field and the SettingsDrawer
+  Theme field; takes `{ value, label }` items and a string
+  `onValueChange`.
+- Recommended-models field for cloud providers replaced the
+  `<select>` + free-text `<input>` pair with a single Base UI
+  `Combobox`. Typing filters the list; an explicit "No matches —
+  press Enter to use as-is" empty state preserves the free-text
+  override path. The Other-provider three-input stack
+  (model + base URL + API key) is unchanged.
+- Adopted Tailwind CSS v4 via `@tailwindcss/vite`. Component styling
+  migrated from hand-rolled CSS classes (`rs-`, `conv-`, `msg-`, etc.)
+  to Tailwind utility classes inline in JSX. The CSS-variables theming
+  is preserved and surfaced as Tailwind color tokens via
+  `@theme inline { --color-bg: var(--bg); ... }`, so utilities like
+  `bg-bg` / `text-fg` / `border-border` automatically follow
+  `[data-theme="..."]` switches without needing the `dark:` variant.
+  `App.css` shrank to roughly: theme variables, markdown-content rules
+  (`.md p`, `.md h1`...) that target generated HTML, code-block wrapper,
+  and Radix `data-state` keyframes.
+
 ### Fixed
+- AlertDialog / SettingsDrawer flashed in the top-left quadrant for one
+  animation cycle before settling in the center after the Tailwind
+  migration. Cause: Tailwind v4 centers via the modern `translate:`
+  property (`-translate-x-1/2 -translate-y-1/2`), but the dialog
+  pop-in/out keyframes wrote to the legacy `transform: translate(...)`.
+  The two properties compose additively, double-translating the dialog
+  off-center while the animation ran. Keyframes now animate only
+  `scale` + `opacity`, leaving translation entirely to Tailwind.
 - Crash on app close inside `__cxa_finalize` →
   `ggml_metal_device_free` →
   `GGML_ASSERT([rsets->data count] == 0) failed`. Cause: the worker

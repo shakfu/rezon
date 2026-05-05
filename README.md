@@ -64,10 +64,10 @@ Working end-to-end on macOS:
 ```
 src/                    React + Vite frontend
   App.tsx               Orchestrator: state, event listeners, layout
-  App.css               Styles (CSS variables, themed via :root[data-theme])
+  App.css               Tailwind v4 entry + theme variables + markdown/code CSS
   Sidebar.tsx           Left: conversations list + new/rename/delete + settings
   RightSidebar.tsx      Right: provider, model, per-conversation system prompt
-  SettingsDrawer.tsx    Theme, font size, default system prompt (Radix Dialog)
+  SettingsDrawer.tsx    Theme, font size, default system prompt (Base UI Dialog)
   MessageBody.tsx       Markdown + math + code highlighting + copy buttons
   storage.ts            localStorage wrappers for conversations + settings
   types.ts              Conversation, Msg, Settings, MsgStats, ...
