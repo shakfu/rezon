@@ -1,6 +1,10 @@
 import { useState } from "react";
-import { AlertDialog } from "@base-ui/react/alert-dialog";
-import { Tooltip } from "@base-ui/react/tooltip";
+import {
+  AlertDialog,
+  AlertDialogBackdrop,
+  AlertDialogPopup,
+} from "./Dialog";
+import { Tooltip } from "./Tooltip";
 import { Conversation } from "./types";
 
 type Props = {
@@ -23,39 +27,6 @@ const FULL_BTN =
 
 const ALERT_BTN =
   "rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[13px] text-fg cursor-pointer hover:bg-bg-soft";
-
-const TOOLTIP_POPUP =
-  "tooltip z-[200] select-none rounded bg-fg px-2 py-1 text-[11px] leading-none text-bg";
-
-function TooltippedButton({
-  label,
-  side = "right",
-  className,
-  onClick,
-  children,
-}: {
-  label: string;
-  side?: "left" | "right" | "top" | "bottom";
-  className: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip.Root>
-      <Tooltip.Trigger className={className} onClick={onClick}>
-        {children}
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Positioner side={side} sideOffset={6}>
-          <Tooltip.Popup className={TOOLTIP_POPUP}>
-            {label}
-            <Tooltip.Arrow className="fill-fg" />
-          </Tooltip.Popup>
-        </Tooltip.Positioner>
-      </Tooltip.Portal>
-    </Tooltip.Root>
-  );
-}
 
 export function Sidebar({
   conversations,
@@ -90,20 +61,20 @@ export function Sidebar({
   if (collapsed) {
     return (
       <aside className="flex w-10 flex-col items-center gap-1.5 border-r border-border-soft bg-bg-elev py-2">
-        <TooltippedButton
+        <Tooltip
           label="Expand sidebar"
           className={SIDEBAR_BTN}
           onClick={onToggle}
         >
           »
-        </TooltippedButton>
-        <TooltippedButton
+        </Tooltip>
+        <Tooltip
           label="New chat"
           className={SIDEBAR_BTN}
           onClick={onNew}
         >
           +
-        </TooltippedButton>
+        </Tooltip>
       </aside>
     );
   }
@@ -114,13 +85,13 @@ export function Sidebar({
         <button className={FULL_BTN} onClick={onNew}>
           + New chat
         </button>
-        <TooltippedButton
+        <Tooltip
           label="Collapse sidebar"
           className={SIDEBAR_BTN}
           onClick={onToggle}
         >
           «
-        </TooltippedButton>
+        </Tooltip>
       </div>
 
       <ul className="flex-1 list-none overflow-y-auto p-1.5 m-0">
@@ -202,8 +173,8 @@ export function Sidebar({
         onOpenChange={(v) => !v && setPendingDelete(null)}
       >
         <AlertDialog.Portal>
-          <AlertDialog.Backdrop className="dialog-overlay fixed inset-0 z-[100] bg-black/40" />
-          <AlertDialog.Popup className="dialog fixed top-1/2 left-1/2 z-[101] flex w-[360px] -translate-x-1/2 -translate-y-1/2 flex-col gap-2.5 rounded-lg border border-border bg-bg-elev p-4 text-fg shadow-[0_20px_60px_rgba(0,0,0,0.4)]">
+          <AlertDialogBackdrop />
+          <AlertDialogPopup className="flex w-[360px] flex-col gap-2.5 p-4">
             <AlertDialog.Title className="m-0 text-[1.05em] font-semibold">
               Delete conversation?
             </AlertDialog.Title>
@@ -224,7 +195,7 @@ export function Sidebar({
                 Delete
               </AlertDialog.Close>
             </div>
-          </AlertDialog.Popup>
+          </AlertDialogPopup>
         </AlertDialog.Portal>
       </AlertDialog.Root>
     </aside>

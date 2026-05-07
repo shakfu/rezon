@@ -1,4 +1,4 @@
-import { Dialog } from "@base-ui/react/dialog";
+import { Dialog, DialogBackdrop, DialogPopup } from "./Dialog";
 import { BaseSelect } from "./Select";
 import { Settings, Theme } from "./types";
 
@@ -16,8 +16,8 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={(v) => !v && onClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="dialog-overlay fixed inset-0 z-[100] bg-black/40" />
-        <Dialog.Popup className="dialog fixed top-1/2 left-1/2 z-[101] flex w-[420px] max-w-[90vw] max-h-[80vh] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-border bg-bg-elev text-fg shadow-[0_20px_60px_rgba(0,0,0,0.4)]">
+        <DialogBackdrop />
+        <DialogPopup className="flex w-[420px] max-w-[90vw] max-h-[80vh] flex-col">
           <div className="flex items-center justify-between border-b border-border-soft px-4 py-3">
             <Dialog.Title className="m-0 text-[1.05em] font-semibold">
               Settings
@@ -29,7 +29,7 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: Props) {
               ×
             </Dialog.Close>
           </div>
-          <Dialog.Description className="sr-only-x">
+          <Dialog.Description className="sr-only">
             Theme, font size, and default system prompt for new conversations.
           </Dialog.Description>
           <div className="flex flex-col gap-3.5 overflow-y-auto px-4 py-3.5">
@@ -84,7 +84,7 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: Props) {
               </small>
             </label>
           </div>
-        </Dialog.Popup>
+        </DialogPopup>
       </Dialog.Portal>
     </Dialog.Root>
   );

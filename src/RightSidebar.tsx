@@ -1,5 +1,5 @@
 import { Combobox } from "@base-ui/react/combobox";
-import { Tooltip } from "@base-ui/react/tooltip";
+import { Tooltip } from "./Tooltip";
 import { BaseSelect } from "./Select";
 import { CloudProviderInfo, Conversation } from "./types";
 
@@ -42,37 +42,6 @@ const BTN =
 
 const SIDEBAR_BTN =
   "w-7 h-7 flex items-center justify-center rounded-md border border-border bg-transparent text-fg-dim hover:bg-bg-soft hover:text-fg cursor-pointer text-sm leading-none";
-
-const TOOLTIP_POPUP =
-  "tooltip z-[200] select-none rounded bg-fg px-2 py-1 text-[11px] leading-none text-bg";
-
-function SidebarToggle({
-  side,
-  label,
-  onClick,
-  children,
-}: {
-  side: "left" | "right";
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <Tooltip.Root>
-      <Tooltip.Trigger className={SIDEBAR_BTN} onClick={onClick}>
-        {children}
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Positioner side={side} sideOffset={6}>
-          <Tooltip.Popup className={TOOLTIP_POPUP}>
-            {label}
-            <Tooltip.Arrow className="fill-fg" />
-          </Tooltip.Popup>
-        </Tooltip.Positioner>
-      </Tooltip.Portal>
-    </Tooltip.Root>
-  );
-}
 
 function ModelCombobox({
   items,
@@ -151,9 +120,14 @@ export function RightSidebar(props: Props) {
   if (collapsed) {
     return (
       <aside className="flex w-10 flex-col items-center border-l border-border-soft bg-bg-elev py-2">
-        <SidebarToggle side="left" label="Expand sidebar" onClick={onToggle}>
+        <Tooltip
+          side="left"
+          label="Expand sidebar"
+          className={SIDEBAR_BTN}
+          onClick={onToggle}
+        >
           «
-        </SidebarToggle>
+        </Tooltip>
       </aside>
     );
   }
@@ -161,9 +135,14 @@ export function RightSidebar(props: Props) {
   return (
     <aside className="flex w-72 flex-col overflow-y-auto border-l border-border-soft bg-bg-elev">
       <div className="flex justify-start border-b border-border-soft px-2.5 py-2">
-        <SidebarToggle side="left" label="Collapse sidebar" onClick={onToggle}>
+        <Tooltip
+          side="left"
+          label="Collapse sidebar"
+          className={SIDEBAR_BTN}
+          onClick={onToggle}
+        >
           »
-        </SidebarToggle>
+        </Tooltip>
       </div>
 
       <Section title="Provider">
