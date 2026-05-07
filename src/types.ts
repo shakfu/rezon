@@ -38,12 +38,15 @@ export type Conversation = {
 
 export type Theme = "system" | "light" | "dark";
 
+export type ContextOverflow = "error" | "slide";
+
 export type Settings = {
   theme: Theme;
   fontSize: number;
   defaultSystemPrompt: string;
   leftSidebarCollapsed: boolean;
   rightSidebarCollapsed: boolean;
+  contextOverflow: ContextOverflow;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -52,4 +55,5 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultSystemPrompt: "You are a concise, helpful assistant.",
   leftSidebarCollapsed: false,
   rightSidebarCollapsed: false,
+  contextOverflow: "error",
 };

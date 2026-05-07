@@ -69,6 +69,10 @@ export function loadSettings(): Settings {
         typeof parsed.rightSidebarCollapsed === "boolean"
           ? parsed.rightSidebarCollapsed
           : DEFAULT_SETTINGS.rightSidebarCollapsed,
+      contextOverflow:
+        parsed.contextOverflow === "slide" || parsed.contextOverflow === "error"
+          ? parsed.contextOverflow
+          : DEFAULT_SETTINGS.contextOverflow,
     };
   } catch {
     return DEFAULT_SETTINGS;

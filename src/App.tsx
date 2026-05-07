@@ -208,6 +208,9 @@ function App() {
           setLoadError(e.payload);
         }),
       );
+      unlistens.push(
+        await listen("open-settings", () => setSettingsOpen(true)),
+      );
 
       if (cancelled) {
         unlistens.forEach((u) => u && u());
@@ -400,7 +403,6 @@ function App() {
         onNew={newChat}
         onRename={(id, title) => updateConversation(id, (c) => ({ ...c, title }))}
         onDelete={deleteConversation}
-        onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="flex h-screen min-w-0 flex-1 flex-col">
         <header className="flex items-baseline justify-between gap-3 border-b border-border-soft px-4 py-3 font-semibold">

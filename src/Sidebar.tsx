@@ -16,7 +16,6 @@ type Props = {
   onNew: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
-  onOpenSettings: () => void;
 };
 
 const SIDEBAR_BTN =
@@ -37,7 +36,6 @@ export function Sidebar({
   onNew,
   onRename,
   onDelete,
-  onOpenSettings,
 }: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -161,12 +159,6 @@ export function Sidebar({
           </li>
         )}
       </ul>
-
-      <div className="border-t border-border-soft p-2.5">
-        <button className={FULL_BTN} onClick={onOpenSettings}>
-          Settings
-        </button>
-      </div>
 
       <AlertDialog.Root
         open={!!pendingDelete}

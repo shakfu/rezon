@@ -83,6 +83,28 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: Props) {
                 keep their own prompt.
               </small>
             </label>
+            <label className="flex flex-col gap-1.5 text-[13px]">
+              <span className="flex items-center justify-between gap-3">
+                <span>Slide context window on overflow</span>
+                <input
+                  type="checkbox"
+                  checked={settings.contextOverflow === "slide"}
+                  onChange={(e) =>
+                    onChange({
+                      ...settings,
+                      contextOverflow: e.currentTarget.checked
+                        ? "slide"
+                        : "error",
+                    })
+                  }
+                />
+              </span>
+              <small className="text-[11px] text-fg-dim">
+                When the conversation exceeds the model's context length,
+                drop the oldest non-system messages to keep going. Off by
+                default: long conversations error instead, so you notice.
+              </small>
+            </label>
           </div>
         </DialogPopup>
       </Dialog.Portal>
