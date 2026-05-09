@@ -1,3 +1,4 @@
+pub mod agent;
 mod llm;
 
 use tauri::menu::{
@@ -11,12 +12,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(llm::LlmState::default())
+        .manage(agent::commands::AgentState::default())
         .invoke_handler(tauri::generate_handler![
             llm::load_model,
             llm::model_status,
             llm::chat,
             llm::cancel_chat,
-            llm::cloud_providers
+            llm::cloud_providers,
+            agent::commands::agent_chat,
+            agent::commands::cancel_agent,
+            agent::commands::confirm_tool_call,
+            agent::commands::tools_catalog,
         ])
         .setup(|app| {
             // ---- Native menu (macOS app menu + Edit) ----
@@ -85,6 +91,10 @@ pub fn run() {
 
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
+            // Cancel any in-flight agent run before tearing down the
+            // local model state, so the agent loop's stream consumer
+            // exits promptly.
+            handle.state::<agent::commands::AgentState>().shutdown();
             handle.state::<llm::LlmState>().shutdown();
         }
     });

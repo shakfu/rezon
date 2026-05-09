@@ -228,7 +228,13 @@ export function RightSidebar(props: Props) {
               />
             </div>
           ) : (
+            // `key` forces a fresh Combobox per provider. Without it,
+            // the underlying Base UI component keeps stale internal
+            // filter / popup state across provider switches and the
+            // dropdown needs two chevron clicks to surface the new
+            // provider's model list.
             <ModelCombobox
+              key={activeCloud.key}
               items={activeCloud.recommendedModels}
               value={cloudModel[activeCloud.key] ?? ""}
               onChange={(v) =>

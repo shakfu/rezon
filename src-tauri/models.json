@@ -1,0 +1,70 @@
+{
+  "_comment": "Cloud provider catalog. Edit to add models or change defaults; rezo embeds this at build time via include_str!. Order in `recommendedModels` is the order shown in the dropdown; the first entry should be the cheapest/default for that provider.",
+  "providers": [
+    {
+      "key": "openai",
+      "label": "OpenAI",
+      "envVar": "OPENAI_API_KEY",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultModel": "gpt-5.4-nano",
+      "recommendedModels": [
+        "gpt-5.4-nano",
+        "gpt-5.4-mini",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro"
+      ],
+      "userConfigurable": false
+    },
+    {
+      "key": "anthropic",
+      "label": "Anthropic",
+      "envVar": "ANTHROPIC_API_KEY",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "defaultModel": "claude-haiku-4-5",
+      "recommendedModels": [
+        "claude-haiku-4-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7"
+      ],
+      "userConfigurable": false
+    },
+    {
+      "key": "openrouter",
+      "label": "OpenRouter",
+      "envVar": "OPENROUTER_API_KEY",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "defaultModel": "google/gemini-2.5-flash-lite",
+      "recommendedModels": [
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-flash",
+        "google/gemini-3-flash-preview",
+        "deepseek/deepseek-v3.2",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+        "google/gemma-4-26b-a4b-it:free",
+        "google/gemma-4-31b-it:free",
+        "moonshotai/kimi-k2.5",
+        "moonshotai/kimi-k2.6",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/owl-alpha",
+        "qwen/qwen3-235b-a22b-2507",
+        "qwen/qwen3.5-flash-02-23",
+        "qwen/qwen3.6-plus",
+        "x-ai/grok-4.1-fast",
+        "x-ai/grok-4.3"
+      ],
+      "userConfigurable": false
+    },
+    {
+      "key": "other",
+      "label": "Other",
+      "envVar": "",
+      "baseUrl": "",
+      "defaultModel": "",
+      "recommendedModels": [],
+      "userConfigurable": true
+    }
+  ]
+}

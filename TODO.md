@@ -8,10 +8,10 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
       the UI instead of using API defaults.
 - [ ] Cloud: surface non-stream errors with HTTP status / body, not just
       `format!("{e}")`.
-- [ ] Persist provider choice + per-provider chosen model across restarts.
+- [x] Persist provider choice + per-provider chosen model across restarts.
 - [ ] User-overridable cloud-models config at
-      `~/Library/Application Support/<app>/cloud-models.json`, replacing
-      the static lists in `llm.rs` when present.
+      `~/Library/Application Support/<app>/cloud-models.json`, layering
+      on top of the build-time `src-tauri/models.json` when present.
 - [ ] Save the API key entered for the `other` provider (currently it
       lives only in React state and is lost on app restart). Likely
       destination: OS keychain.
@@ -48,6 +48,43 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
       to that point and re-send).
 - [ ] Sidebars: drag to resize (collapse already implemented).
 - [ ] Pretty timestamps under each message.
+
+## Tools / agent
+
+- [ ] **`file_read` path sandboxing.** Today the user is the only gate
+      (per-call confirmation). Add a `Settings.fileReadRoot` (or an
+      allow-list of roots) that the tool checks before reading; reject
+      paths outside. Default empty = current behavior.
+- [ ] **`web_fetch` domain allow/blocklist.** Same posture: confirmation
+      is the gate today. Add a `Settings.webFetchAllowedHosts` /
+      `webFetchBlockedHosts` so power users can pin the tool to a
+      specific set of sites without re-confirming each call.
+- [ ] **Stream large `web_fetch` bodies.** Whole body is buffered before
+      truncation. Fine at the 1 MiB cap; would need rework if the cap
+      is ever raised significantly. Use `Response::bytes_stream()` and
+      stop at `MAX_BYTES`.
+- [ ] **"Remember per session" on the confirmation dialog.** Current
+      "Ask" prompts on every call. Add a checkbox in the confirm dialog:
+      "Always allow `web_fetch` for this conversation". Stores in a
+      conversation-scoped trust map (not persisted across sessions).
+- [ ] **Trust toggles persisted across sessions.** Same shape as above
+      but persisted; surface a "Revoke" button somewhere. Higher-stakes;
+      worth waiting until the threat model is clearer.
+- [ ] **`shell_exec` improvements.** Today: spawn one command, capture
+      stdout/stderr, enforce timeout (kills child on overrun) and per-
+      stream output cap, optional `cwd`. Future: stdin piping, env-var
+      allow-list, mid-run cancel via the agent loop's cancel flag.
+- [ ] **Per-conversation tool sets.** Decision #2 was "all tools always
+      available". If users start asking for "research mode" vs "code
+      mode", revisit.
+- [ ] **Show reasoning toggle.** Qwen 3's `<think>` blocks are dropped on
+      the floor today (per design decision #4 the indicator is the
+      streaming spinner). Add a collapsible "Show reasoning" affordance
+      under each assistant bubble that did emit thinking deltas.
+- [ ] **Truncate large tool results when persisting to localStorage.**
+      The design said to do this; current code stores the full string.
+      Risk: a large `web_fetch` body in conversation history can blow
+      past the localStorage quota.
 
 ## Engineering
 

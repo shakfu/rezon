@@ -23,10 +23,21 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1.0.102"
-tokio = { version = "1.52.2", features = ["sync"] }
+tokio = { version = "1.52.2", features = ["sync", "process", "io-util", "time", "macros"] }
 tauri-plugin-dialog = "2.7.1"
 llama-cpp-2 = { version = "0.1.146", features = ["metal"] }
 encoding_rs = "0.8.35"
 async-openai = { version = "0.36", features = ["chat-completion"] }
 futures = "0.3"
+async-trait = "0.1"
+thiserror = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Examples (examples/react_agent.rs) need a runtime; the main app inherits
+# Tauri's runtime so the runtime crate features stay minimal in [dependencies].
+tokio = { version = "1.52.2", features = ["rt", "macros", "time", "net"] }
 

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Tooltip } from "@base-ui/react/tooltip";
+import { Dialog, DialogBackdrop, DialogPopup } from "./Dialog";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import "./App.css";
@@ -14,21 +15,168 @@ import {
   MsgStats,
   ModelStatus,
   Settings,
+  ToolCallEntry,
+  ToolInfo,
+  toolPermissionFor,
 } from "./types";
 import {
   deriveTitle,
+  loadCloudBaseUrls,
+  loadCloudModels,
   loadConversations,
   loadCurrentId,
+  loadLastProvider,
   loadSettings,
   newConversation,
+  saveCloudBaseUrls,
+  saveCloudModels,
   saveConversations,
   saveCurrentId,
+  saveLastProvider,
   saveSettings,
 } from "./storage";
 import { MessageBody, CopyButton } from "./MessageBody";
 import { Sidebar } from "./Sidebar";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { RightSidebar } from "./RightSidebar";
+
+function ConfirmToolDialog({
+  pending,
+  onResolve,
+}: {
+  pending: { confirmationId: string; name: string; arguments: string } | null;
+  onResolve: (id: string, approved: boolean) => void;
+}) {
+  if (!pending) return null;
+
+  const pretty = (() => {
+    try {
+      const parsed = JSON.parse(pending.arguments || "{}");
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      return pending.arguments;
+    }
+  })();
+
+  // Closing the dialog (escape, backdrop click) counts as denial so
+  // the agent loop unblocks. The backend's oneshot is consumed by
+  // either button or the dialog's onOpenChange.
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(v) => {
+        if (!v) onResolve(pending.confirmationId, false);
+      }}
+    >
+      <Dialog.Portal>
+        <DialogBackdrop />
+        <DialogPopup className="flex w-[460px] max-w-[90vw] max-h-[80vh] flex-col">
+          <div className="flex items-center justify-between border-b border-border-soft px-4 py-3">
+            <Dialog.Title className="m-0 text-[1.05em] font-semibold">
+              Allow tool call?
+            </Dialog.Title>
+            <Dialog.Close
+              className="cursor-pointer border-none bg-transparent px-1 text-[22px] leading-none text-fg"
+              aria-label="Deny and close"
+            >
+              ×
+            </Dialog.Close>
+          </div>
+          <Dialog.Description className="sr-only">
+            The assistant wants to call a tool. Approve or deny.
+          </Dialog.Description>
+          <div className="flex flex-col gap-3 overflow-y-auto px-4 py-3.5 text-[13px]">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-wider text-fg-dim">
+                Tool
+              </span>
+              <code className="font-mono text-[13px]">{pending.name}</code>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-wider text-fg-dim">
+                Arguments
+              </span>
+              <pre className="m-0 max-h-60 overflow-auto rounded-md border border-border-soft bg-bg/40 p-2 font-mono text-[12px]">
+                {pretty}
+              </pre>
+            </div>
+            <div className="text-[11px] text-fg-dim">
+              Use Settings &rsaquo; Tools to set this tool to "Always" if you
+              don't want to be asked again.
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border-soft px-4 py-3">
+            <button
+              type="button"
+              className="cursor-pointer rounded-md border border-border bg-transparent px-3 py-1.5 text-[13px] text-fg hover:bg-bg-soft"
+              onClick={() => onResolve(pending.confirmationId, false)}
+            >
+              Deny
+            </button>
+            <button
+              type="button"
+              className="cursor-pointer rounded-md border-none bg-accent px-3 py-1.5 text-[13px] font-semibold text-white"
+              onClick={() => onResolve(pending.confirmationId, true)}
+              autoFocus
+            >
+              Approve
+            </button>
+          </div>
+        </DialogPopup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function ToolPill({ call }: { call: ToolCallEntry }) {
+  const [expanded, setExpanded] = useState(false);
+  const dot =
+    call.status === "running" ? (
+      <span className="dot-pulse inline-block">·</span>
+    ) : call.status === "ok" ? (
+      <span className="text-success">✓</span>
+    ) : (
+      <span className="text-danger">✗</span>
+    );
+
+  return (
+    <div className="rounded-md border border-border-soft bg-bg/40 font-mono text-[11px]">
+      <button
+        type="button"
+        className="flex cursor-pointer items-center gap-1.5 border-none bg-transparent px-2 py-0.5 text-fg"
+        onClick={() => setExpanded((x) => !x)}
+        title={call.id}
+      >
+        {dot}
+        <span>{call.name}</span>
+        <span className="opacity-50">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border-soft px-2 py-1.5 text-[11px]">
+          {call.arguments && (
+            <div className="mb-1">
+              <div className="opacity-60">arguments</div>
+              <pre className="m-0 whitespace-pre-wrap break-all">
+                {call.arguments}
+              </pre>
+            </div>
+          )}
+          {call.status !== "running" && (
+            <div>
+              <div className="opacity-60">{call.error ? "error" : "result"}</div>
+              <pre className="m-0 whitespace-pre-wrap break-all">
+                {call.error ??
+                  (typeof call.result === "string"
+                    ? call.result
+                    : JSON.stringify(call.result, null, 2))}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function modelName(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
@@ -66,13 +214,16 @@ function App() {
     loadCurrentId(),
   );
 
-  // Ensure at least one conversation and a valid current selection.
+  // Validate the current selection. If the persisted currentId no
+  // longer matches an existing conversation, fall back to the most
+  // recent one. We deliberately do NOT auto-create a conversation
+  // when the list is empty: the chat input handles that on first
+  // send, so a fresh launch can show an empty sidebar without a
+  // throwaway "New chat".
   useEffect(() => {
-    if (conversations.length === 0) {
-      const c = newConversation(settings.defaultSystemPrompt);
-      setConversations([c]);
-      setCurrentId(c.id);
-    } else if (!currentId || !conversations.some((c) => c.id === currentId)) {
+    if (currentId && !conversations.some((c) => c.id === currentId)) {
+      setCurrentId(conversations.length > 0 ? conversations[0].id : null);
+    } else if (!currentId && conversations.length > 0) {
       setCurrentId(conversations[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -126,13 +277,51 @@ function App() {
   const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [provider, setProvider] = useState<string>("local");
+  const [provider, setProvider] = useState<string>(
+    () => loadLastProvider() ?? "local",
+  );
   const [cloudProviders, setCloudProviders] = useState<CloudProviderInfo[]>([]);
-  const [cloudModel, setCloudModel] = useState<Record<string, string>>({});
-  const [cloudBaseUrl, setCloudBaseUrl] = useState<Record<string, string>>({});
+  const [cloudModel, setCloudModel] = useState<Record<string, string>>(() =>
+    loadCloudModels(),
+  );
+  const [cloudBaseUrl, setCloudBaseUrl] = useState<Record<string, string>>(
+    () => loadCloudBaseUrls(),
+  );
+  // Note: API keys are intentionally NOT persisted (security: localStorage
+  // is plaintext). User re-enters for "other" each launch.
   const [cloudApiKey, setCloudApiKey] = useState<Record<string, string>>({});
+  // Tool catalog from the backend; powers the Settings > Tools tab and
+  // the toolPermissions map passed to agent_chat.
+  const [tools, setTools] = useState<ToolInfo[]>([]);
+  // Pending tool-confirmation prompt, if any. The agent loop is paused
+  // on a backend oneshot until the user clicks Approve or Deny.
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    confirmationId: string;
+    name: string;
+    arguments: string;
+  } | null>(null);
+
+  // Persist provider + per-provider model and base URL on change.
+  useEffect(() => {
+    saveLastProvider(provider);
+  }, [provider]);
+  useEffect(() => {
+    saveCloudModels(cloudModel);
+  }, [cloudModel]);
+  useEffect(() => {
+    saveCloudBaseUrls(cloudBaseUrl);
+  }, [cloudBaseUrl]);
   const streamingRef = useRef(false);
   const streamingConvIdRef = useRef<string | null>(null);
+  // True once a tool dispatched in the current turn has finished and we
+  // are waiting for the next turn's first token/tool_call. The next
+  // streaming event creates a fresh assistant Msg.
+  //
+  // Why this and not "last msg has stats": OpenAI emits the per-turn
+  // usage chunk *before* the loop dispatches tools, so stats arrives
+  // mid-bubble and is not a reliable turn boundary. The actual
+  // boundary is "tool-end -> next content/tool-start".
+  const needsNewBubbleRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ---- Tauri event wiring ----
@@ -188,6 +377,165 @@ function App() {
         }),
       );
 
+      // ---- Agent loop events (phase 3+). Same conversation slot as the
+      // chat path: the loop owns the streaming assistant Msg and any
+      // follow-up assistant Msgs once tool dispatch has happened.
+      //
+      // Turn-boundary detection: a new bubble starts when a tool from
+      // the current turn has dispatched and a fresh content/tool-start
+      // arrives. `needsNewBubbleRef` is set on tool-end and consumed by
+      // ensureStreamingMsgSlot; that way multiple tool-ends in the
+      // same turn don't multiply bubbles, and an early per-turn stats
+      // event doesn't split mid-turn.
+      const ensureStreamingMsgSlot = (cid: string) => {
+        const needsNew = needsNewBubbleRef.current;
+        if (needsNew) needsNewBubbleRef.current = false;
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.id !== cid) return c;
+            const msgs = [...c.messages];
+            const last = msgs[msgs.length - 1];
+            if (!last || last.role !== "assistant" || needsNew) {
+              msgs.push({ role: "assistant", content: "" });
+            }
+            return { ...c, messages: msgs };
+          }),
+        );
+      };
+
+      const updateLastAssistant = (
+        cid: string,
+        mut: (m: Msg) => Msg,
+      ) => {
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.id !== cid) return c;
+            const msgs = [...c.messages];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === "assistant") {
+                msgs[i] = mut(msgs[i]);
+                break;
+              }
+            }
+            return { ...c, messages: msgs };
+          }),
+        );
+      };
+
+      unlistens.push(
+        await listen<string>("agent-token", (e) => {
+          if (!streamingRef.current) return;
+          const cid = streamingConvIdRef.current;
+          if (!cid) return;
+          ensureStreamingMsgSlot(cid);
+          updateLastAssistant(cid, (m) => ({
+            ...m,
+            content: m.content + e.payload,
+          }));
+        }),
+      );
+
+      unlistens.push(
+        await listen<string>("agent-thinking", (_e) => {
+          // Per design decision #4: thinking content is hidden by
+          // default; we just want the indicator to be active. The
+          // streaming flag already drives the cursor in the UI.
+        }),
+      );
+
+      unlistens.push(
+        await listen<{ id: string; name: string }>("agent-tool-start", (e) => {
+          const cid = streamingConvIdRef.current;
+          if (!cid) return;
+          ensureStreamingMsgSlot(cid);
+          updateLastAssistant(cid, (m) => {
+            const entry: ToolCallEntry = {
+              id: e.payload.id,
+              name: e.payload.name,
+              status: "running",
+            };
+            return {
+              ...m,
+              toolCalls: [...(m.toolCalls ?? []), entry],
+            };
+          });
+        }),
+      );
+
+      unlistens.push(
+        await listen<{
+          id: string;
+          ok: boolean;
+          result: unknown | null;
+          error: string | null;
+        }>("agent-tool-end", (e) => {
+          const cid = streamingConvIdRef.current;
+          if (!cid) return;
+          updateLastAssistant(cid, (m) => ({
+            ...m,
+            toolCalls: (m.toolCalls ?? []).map((tc) =>
+              tc.id === e.payload.id
+                ? {
+                    ...tc,
+                    status: e.payload.ok ? "ok" : "error",
+                    result: e.payload.result ?? undefined,
+                    error: e.payload.error ?? undefined,
+                  }
+                : tc,
+            ),
+          }));
+          // The next agent-token / agent-tool-start belongs to a new
+          // turn -> open a fresh assistant bubble for it.
+          needsNewBubbleRef.current = true;
+        }),
+      );
+
+      unlistens.push(
+        await listen<MsgStats>("agent-stats", (e) => {
+          const cid = streamingConvIdRef.current;
+          if (!cid) return;
+          updateLastAssistant(cid, (m) => ({ ...m, stats: e.payload }));
+        }),
+      );
+
+      unlistens.push(
+        await listen<string>("agent-done", () => {
+          streamingRef.current = false;
+          setStreaming(false);
+        }),
+      );
+
+      unlistens.push(
+        await listen("agent-cancelled", () => {
+          streamingRef.current = false;
+          setStreaming(false);
+        }),
+      );
+
+      unlistens.push(
+        await listen<{
+          confirmationId: string;
+          name: string;
+          arguments: string;
+        }>("agent-tool-confirm", (e) => {
+          setPendingConfirm(e.payload);
+        }),
+      );
+
+      unlistens.push(
+        await listen<string>("agent-error", (e) => {
+          streamingRef.current = false;
+          setStreaming(false);
+          const cid = streamingConvIdRef.current;
+          if (!cid) return;
+          updateLastAssistant(cid, (m) => ({
+            ...m,
+            content: m.content || e.payload,
+            isError: true,
+          }));
+        }),
+      );
+
       unlistens.push(
         await listen<string>("model-loading", (e) => {
           setModelPath(e.payload);
@@ -236,6 +584,12 @@ function App() {
           }
           return next;
         });
+      } catch {
+        /* ignore */
+      }
+      try {
+        const list = await invoke<ToolInfo[]>("tools_catalog");
+        setTools(list);
       } catch {
         /* ignore */
       }
@@ -294,7 +648,6 @@ function App() {
     : false;
 
   async function send() {
-    if (!current) return;
     const text = input.trim();
     if (!text || streaming) return;
     if (provider === "local" && !loadedPath) return;
@@ -302,20 +655,44 @@ function App() {
 
     const userMsg: Msg = { role: "user", content: text };
     const newAssistant: Msg = { role: "assistant", content: "" };
-    const history = [...current.messages, userMsg];
-    const titled = current.messages.length === 0;
-    updateConversation(current.id, (c) => ({
-      ...c,
-      title: titled ? deriveTitle(text) : c.title,
-      messages: [...history, newAssistant],
-    }));
+
+    // Resolve (or create) the conversation this send targets. Two
+    // paths so the new-chat case doesn't hit `updateConversation`,
+    // which would map over a state that doesn't yet contain the
+    // freshly-created entry.
+    let convId: string;
+    let systemPrompt: string;
+    let history: Msg[];
+    if (current) {
+      convId = current.id;
+      systemPrompt = current.systemPrompt;
+      history = [...current.messages, userMsg];
+      const titled = current.messages.length === 0;
+      updateConversation(current.id, (c) => ({
+        ...c,
+        title: titled ? deriveTitle(text) : c.title,
+        messages: [...history, newAssistant],
+      }));
+    } else {
+      const created = {
+        ...newConversation(settings.defaultSystemPrompt),
+        title: deriveTitle(text),
+        messages: [userMsg, newAssistant] as Msg[],
+      };
+      convId = created.id;
+      systemPrompt = created.systemPrompt;
+      history = [userMsg];
+      setConversations((prev) => [created, ...prev]);
+      setCurrentId(created.id);
+    }
     setInput("");
     streamingRef.current = true;
-    streamingConvIdRef.current = current.id;
+    streamingConvIdRef.current = convId;
+    needsNewBubbleRef.current = false;
     setStreaming(true);
 
     const payload: Msg[] = [
-      { role: "system", content: current.systemPrompt },
+      { role: "system", content: systemPrompt },
       ...history,
     ];
 
@@ -330,16 +707,40 @@ function App() {
         : { provider: activeCloud.key, model: activeCloudModel }
       : { provider: "local" };
 
+    // Tool calling lives on the agent loop. Both cloud and local
+    // (phase 4+) are supported; the local path requires a tool-aware
+    // chat template baked into the loaded GGUF (Qwen 3, Llama 3.1+,
+    // Mistral Nemo, etc.) - the worker will emit an error delta if
+    // not.
+    const useAgent = settings.toolsEnabled;
+
     try {
-      await invoke<string>("chat", { messages: payload, opts });
+      if (useAgent) {
+        // Resolve every registered tool to its effective permission
+        // ("ask" | "always" | "disable"). Backend filters disable,
+        // and the confirmation gate uses the rest to decide whether
+        // to prompt or auto-approve per call.
+        const toolPermissions = tools.reduce<Record<string, string>>(
+          (acc, t) => {
+            acc[t.name] = toolPermissionFor(settings.toolPermissions, t);
+            return acc;
+          },
+          {},
+        );
+        await invoke<string>("agent_chat", {
+          messages: payload,
+          opts: { ...opts, toolPermissions },
+        });
+      } else {
+        await invoke<string>("chat", { messages: payload, opts });
+      }
     } catch (err) {
       streamingRef.current = false;
       setStreaming(false);
       const errText = String(err);
-      const cid = current.id;
       setConversations((prev) =>
         prev.map((c) => {
-          if (c.id !== cid) return c;
+          if (c.id !== convId) return c;
           const msgs = [...c.messages];
           const last = msgs[msgs.length - 1];
           if (last && last.role === "assistant" && last.content === "") {
@@ -357,15 +758,15 @@ function App() {
     }
   }
 
+  // No `!current` gate: typing into an empty sidebar auto-creates a
+  // new conversation on send.
   const sendDisabled =
     streaming ||
     !input.trim() ||
-    !current ||
     (provider === "local" && !loadedPath) ||
     (!!activeCloud && !cloudReady);
 
   const inputDisabled =
-    !current ||
     streaming ||
     (provider === "local" && !loadedPath) ||
     (!!activeCloud && !cloudReady);
@@ -488,6 +889,13 @@ function App() {
                   ) : (
                     ""
                   )}
+                  {m.toolCalls && m.toolCalls.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {m.toolCalls.map((tc) => (
+                        <ToolPill key={tc.id} call={tc} />
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {m.stats && (
                   <div className="font-mono text-[11px] text-fg-dim">
@@ -525,7 +933,11 @@ function App() {
               type="button"
               className="cursor-pointer rounded-md border-none bg-danger px-4.5 font-semibold text-white"
               onClick={() => {
+                // Fire both: the chat path (and agent path) each
+                // listen on their own command, and cancel is a
+                // no-op when no run is active.
                 invoke("cancel_chat").catch(() => {});
+                invoke("cancel_agent").catch(() => {});
               }}
             >
               Stop
@@ -579,6 +991,17 @@ function App() {
           settings={settings}
           onChange={setSettings}
           onClose={() => setSettingsOpen(false)}
+          tools={tools}
+        />
+        <ConfirmToolDialog
+          pending={pendingConfirm}
+          onResolve={(id, approved) => {
+            setPendingConfirm(null);
+            invoke("confirm_tool_call", {
+              confirmationId: id,
+              approved,
+            }).catch(() => {});
+          }}
         />
       </div>
     </Tooltip.Provider>

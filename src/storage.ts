@@ -8,6 +8,9 @@ import {
 const KEY_CONVS = "rezo:conversations";
 const KEY_CURRENT = "rezo:currentConversationId";
 const KEY_SETTINGS = "rezo:settings";
+const KEY_LAST_PROVIDER = "rezo:lastProvider";
+const KEY_CLOUD_MODELS = "rezo:cloudModels";
+const KEY_CLOUD_BASE_URLS = "rezo:cloudBaseUrls";
 
 export function loadConversations(): Conversation[] {
   try {
@@ -73,6 +76,11 @@ export function loadSettings(): Settings {
         parsed.contextOverflow === "slide" || parsed.contextOverflow === "error"
           ? parsed.contextOverflow
           : DEFAULT_SETTINGS.contextOverflow,
+      toolsEnabled:
+        typeof parsed.toolsEnabled === "boolean"
+          ? parsed.toolsEnabled
+          : DEFAULT_SETTINGS.toolsEnabled,
+      toolPermissions: validateToolPermissions(parsed.toolPermissions),
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -83,6 +91,17 @@ function validateTheme(t: unknown): Theme {
   return t === "light" || t === "dark" || t === "system"
     ? t
     : DEFAULT_SETTINGS.theme;
+}
+
+function validateToolPermissions(
+  raw: unknown,
+): import("./types").ToolPermissions {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, "ask" | "always" | "disable"> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === "ask" || v === "always" || v === "disable") out[k] = v;
+  }
+  return out;
 }
 
 export function saveSettings(s: Settings) {
@@ -110,6 +129,68 @@ export function newConversation(systemPrompt: string): Conversation {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+// ---- Provider + per-provider model persistence ------------------------
+//
+// We persist the last selected provider and the user's per-provider model
+// override (and base URL for the user-configurable "other" provider) so a
+// fresh launch reproduces the previous session's model choice.
+//
+// API keys are deliberately NOT persisted: named providers read theirs
+// from env, and persisting the "other" key in localStorage would put a
+// secret in clear text. Re-entry on launch is the price.
+
+export function loadLastProvider(): string | null {
+  return localStorage.getItem(KEY_LAST_PROVIDER);
+}
+
+export function saveLastProvider(provider: string) {
+  try {
+    localStorage.setItem(KEY_LAST_PROVIDER, provider);
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadStringMap(key: string): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveStringMap(key: string, map: Record<string, string>) {
+  try {
+    localStorage.setItem(key, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadCloudModels(): Record<string, string> {
+  return loadStringMap(KEY_CLOUD_MODELS);
+}
+
+export function saveCloudModels(map: Record<string, string>) {
+  saveStringMap(KEY_CLOUD_MODELS, map);
+}
+
+export function loadCloudBaseUrls(): Record<string, string> {
+  return loadStringMap(KEY_CLOUD_BASE_URLS);
+}
+
+export function saveCloudBaseUrls(map: Record<string, string>) {
+  saveStringMap(KEY_CLOUD_BASE_URLS, map);
 }
 
 export function deriveTitle(firstUserMessage: string): string {
