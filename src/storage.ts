@@ -5,12 +5,12 @@ import {
   Theme,
 } from "./types";
 
-const KEY_CONVS = "rezo:conversations";
-const KEY_CURRENT = "rezo:currentConversationId";
-const KEY_SETTINGS = "rezo:settings";
-const KEY_LAST_PROVIDER = "rezo:lastProvider";
-const KEY_CLOUD_MODELS = "rezo:cloudModels";
-const KEY_CLOUD_BASE_URLS = "rezo:cloudBaseUrls";
+const KEY_CONVS = "rezon:conversations";
+const KEY_CURRENT = "rezon:currentConversationId";
+const KEY_SETTINGS = "rezon:settings";
+const KEY_LAST_PROVIDER = "rezon:lastProvider";
+const KEY_CLOUD_MODELS = "rezon:cloudModels";
+const KEY_CLOUD_BASE_URLS = "rezon:cloudBaseUrls";
 
 export function loadConversations(): Conversation[] {
   try {

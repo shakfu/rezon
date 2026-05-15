@@ -4,7 +4,7 @@ Empirical results from running `src-tauri/examples/local_tool_spike.rs`
 against local GGUF models on Apple M1 with `llama-cpp-2` 0.1.146 and
 `llama-cpp-sys-2` 0.1.146 (Metal backend).
 
-The spike validates whether rezo can support tool-calling on local
+The spike validates whether rezon can support tool-calling on local
 models with quality and a streaming surface comparable to the cloud
 path.
 
@@ -18,7 +18,7 @@ path.
   Qwen 3 4B+ and Llama 3.1 8B+ should be reliable; Llama 3.2 1B is not.
 - No framework is needed: `llama-cpp-2`'s OpenAI-compat surface emits
   the same delta shape that `async-openai` produces from the cloud, so
-  the rezo agent loop can be written once and consume either source.
+  the rezon agent loop can be written once and consume either source.
 
 ## What `llama-cpp-2` provides
 
@@ -115,7 +115,7 @@ This is an **upstream llama.cpp grammar bug**, triggered the moment
 constrained sampling activates after the lazy trigger word. The library
 warning mentions PR #17869 (a backtrace fix), suggesting active work
 in this area. The crash bypasses Drop, which is exactly the failure
-mode rezo's existing teardown discipline was built to avoid.
+mode rezon's existing teardown discipline was built to avoid.
 
 Verdict for grammar route: **not viable on `llama-cpp-2` 0.1.146**.
 Skip grammar entirely until the upstream fix lands.
@@ -168,7 +168,7 @@ EOG fired cleanly. Drop ran in the right order. No crash.
 Verdict: **end-to-end working**, byte-compatible with `async-openai`'s
 `ChatCompletionMessageToolCallChunk` shape.
 
-## Architectural implications for rezo
+## Architectural implications for rezon
 
 1. **The agent loop is provider-agnostic for free.** The cloud and
    local backends emit the same OpenAI-shape delta stream, so the loop
@@ -188,7 +188,7 @@ Verdict: **end-to-end working**, byte-compatible with `async-openai`'s
    `<think>...</think>` as content deltas. The loop should either
    render thinking inline with distinct styling, or hide until the
    tool-call / final-answer portion begins.
-5. **No framework is required to deliver the stated rezo target**
+5. **No framework is required to deliver the stated rezon target**
    (single-agent, multi-tool, OpenAI + Anthropic + OpenRouter + local,
    streaming, almost-invisible UI). The hand-rolled abstraction is the
    right shape for a future framework migration if multi-agent ever

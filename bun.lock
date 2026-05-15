@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "rezo",
+      "name": "rezon",
       "dependencies": {
         "@base-ui/react": "^1.4.1",
         "@tauri-apps/api": "^2",

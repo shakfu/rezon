@@ -69,7 +69,7 @@ impl Provider for LocalProvider {
 ///   - tool turns include `tool_call_id`
 ///
 /// Snake_case fields throughout — that's the wire format the template
-/// engine reads, regardless of what rezo's internal serialization uses
+/// engine reads, regardless of what rezon's internal serialization uses
 /// when talking to the JS layer.
 fn messages_to_openai_json(messages: &[ChatMessage]) -> Vec<Value> {
     messages

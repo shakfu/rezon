@@ -1,6 +1,6 @@
 # Agent Loop and Tool Trait: Design Sketch
 
-A sketch for the rezo agent module. The goal is single-agent,
+A sketch for the rezon agent module. The goal is single-agent,
 multi-tool, streaming, provider-agnostic - covering OpenAI, Anthropic,
 OpenRouter, and local llama-cpp-2 with the same loop.
 
@@ -175,7 +175,7 @@ pub struct ProviderOpts {
 }
 ```
 
-`ChatMessage` is rezo's existing internal message type, extended with
+`ChatMessage` is rezon's existing internal message type, extended with
 `tool_calls` on assistant turns and a `Tool` role for tool results.
 
 ## The loop

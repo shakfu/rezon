@@ -3360,7 +3360,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rezo"
+name = "rezon"
 version = "0.1.0"
 dependencies = [
  "anyhow",

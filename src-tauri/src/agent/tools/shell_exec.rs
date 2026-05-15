@@ -51,7 +51,7 @@ impl Tool for ShellExec {
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Optional absolute working directory. Defaults to the rezo process cwd."
+                    "description": "Optional absolute working directory. Defaults to the rezon process cwd."
                 }
             },
             "required": ["command"]

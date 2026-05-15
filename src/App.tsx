@@ -811,7 +811,7 @@ function App() {
             className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
             title={current?.title}
           >
-            {current?.title ?? "rezo"}
+            {current?.title ?? "rezon"}
           </span>
           <span
             className="overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-normal opacity-60"

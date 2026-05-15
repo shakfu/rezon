@@ -70,7 +70,7 @@ impl Tool for WebFetch {
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .user_agent("rezo/0.1 (+https://github.com/anthropics/rezo)")
+            .user_agent("rezon/0.1 (+https://github.com/anthropics/rezon)")
             .build()
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!("build http client: {e}")))?;
 

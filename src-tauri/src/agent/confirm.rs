@@ -37,7 +37,7 @@ impl ConfirmationGate for AutoApproveGate {
     }
 }
 
-/// Generates a stable-enough confirmation_id within a single rezo
+/// Generates a stable-enough confirmation_id within a single rezon
 /// session: timestamp millis + a process-local counter.
 pub fn next_confirmation_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};

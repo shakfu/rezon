@@ -1,4 +1,4 @@
-# rezo
+# rezon
 
 LLM chat desktop app. Tauri 2 + React 19 frontend, Rust backend with
 interchangeable providers:

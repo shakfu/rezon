@@ -11,7 +11,7 @@ use crate::agent::tool::ToolCall;
 // Variants stay snake_case ("system", "user", "assistant", "tool") to
 // match OpenAI's role naming. Fields (`tool_calls`, `tool_call_id`)
 // switch to camelCase via the inner attribute below so they line up
-// with the rest of the rezo JS types (e.g. `MsgStats`).
+// with the rest of the rezon JS types (e.g. `MsgStats`).
 #[serde(rename_all_fields = "camelCase")]
 pub enum ChatMessage {
     System {

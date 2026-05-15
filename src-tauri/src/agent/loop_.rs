@@ -31,7 +31,7 @@ pub struct AgentOpts {
     pub max_steps: usize,
     /// Gates each tool dispatch on user approval. The default
     /// `AutoApproveGate` makes the loop behave as before; production
-    /// rezo passes a `TauriConfirmationGate` that prompts the user.
+    /// rezon passes a `TauriConfirmationGate` that prompts the user.
     pub gate: Arc<dyn ConfirmationGate>,
 }
 

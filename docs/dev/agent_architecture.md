@@ -2,7 +2,7 @@
 
 Notes on what the ReAct prototype in `src-tauri/examples/react_agent.rs`
 actually is, and how it compares to richer multi-agent patterns. Useful
-context for deciding what rezo should build next.
+context for deciding what rezon should build next.
 
 ## What the prototype is
 
@@ -62,11 +62,11 @@ tool-calling pattern.
 
 | Pattern | Pick when |
 |---|---|
-| Single-agent, multi-tool | The chat needs to run code, search files, hit APIs - one identity is doing all the work, just with extra capabilities. Most rezo use cases live here. |
+| Single-agent, multi-tool | The chat needs to run code, search files, hit APIs - one identity is doing all the work, just with extra capabilities. Most rezon use cases live here. |
 | Multi-agent | You have distinct *roles* (planner / executor / critic), distinct *contexts* (so one agent's huge context does not pollute another's), or distinct *models* (cheap model triages, expensive model reasons). |
 | Composable tools (sub-tool / DAG) | You have repeatable multi-step procedures where the LLM's reasoning at each step adds little value but adds latency and cost. |
 
-## Implication for rezo
+## Implication for rezon
 
 If the eventual goal is "the chat can run code, search files, hit
 APIs," **single-agent multi-tool is sufficient**. Multi-agent is
@@ -76,7 +76,7 @@ contexts, or models.
 Both rig and AutoAgents support both patterns. AutoAgents leans harder
 into the multi-agent orchestration story (typed pub/sub); rig's framing
 is more "agent = LLM + tools + memory, compose externally." Either
-framework is overkill if rezo only ever needs the single-agent pattern.
+framework is overkill if rezon only ever needs the single-agent pattern.
 
 ## Decision posture
 

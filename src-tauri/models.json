@@ -1,5 +1,5 @@
 {
-  "_comment": "Cloud provider catalog. Edit to add models or change defaults; rezo embeds this at build time via include_str!. Order in `recommendedModels` is the order shown in the dropdown; the first entry should be the cheapest/default for that provider.",
+  "_comment": "Cloud provider catalog. Edit to add models or change defaults; rezon embeds this at build time via include_str!. Order in `recommendedModels` is the order shown in the dropdown; the first entry should be the cheapest/default for that provider.",
   "providers": [
     {
       "key": "openai",

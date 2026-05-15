@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 
-use rezo_lib::agent::{
+use rezon_lib::agent::{
     cloud::CloudProvider, confirm::AutoApproveGate, run_agent, tools::default_registry, AgentOpts,
     ChatMessage, LogEventSink, Provider, ProviderOpts,
 };
@@ -112,7 +112,7 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-// Force the rezo_lib crate path; otherwise unused-warning.
+// Force the rezon_lib crate path; otherwise unused-warning.
 #[allow(dead_code)]
 fn _link() -> Result<()> {
     Err(anyhow!("never called"))

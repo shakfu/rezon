@@ -1,9 +1,9 @@
 # Agent Framework Evaluation: Rig vs AutoAgents
 
-Evaluation of Rust LLM/agent frameworks for rezo, given that agents,
+Evaluation of Rust LLM/agent frameworks for rezon, given that agents,
 tools, and RAG are on the eventual roadmap.
 
-## Current rezo stack (baseline)
+## Current rezon stack (baseline)
 
 - `async-openai` driving all 4 cloud providers via OpenAI-compatible
   endpoints (OpenAI, Anthropic, OpenRouter, "other")
@@ -38,9 +38,9 @@ Strengths:
   (prompt caching control, extended thinking, citations)
 - Mature, well-documented, broader community
 
-Weaknesses for rezo:
+Weaknesses for rezon:
 - No llama.cpp / GGUF support. The most carefully engineered part of
-  rezo's backend (worker thread, KV-cache reuse, Metal teardown) gets
+  rezon's backend (worker thread, KV-cache reuse, Metal teardown) gets
   zero help.
 - Adopting rig means two paradigms side-by-side: rig for cloud, custom
   for local. Tools/agents/RAG would only work on cloud unless we
@@ -50,7 +50,7 @@ Weaknesses for rezo:
 ### AutoAgents
 
 Strengths:
-- First-class llama.cpp + Metal support maps directly onto rezo's
+- First-class llama.cpp + Metal support maps directly onto rezon's
   existing local stack
 - Same cloud providers we already use (OpenAI, Anthropic, OpenRouter)
 - WASM-sandboxed tool runtime is a genuinely interesting fit for a
@@ -90,7 +90,7 @@ Weaknesses:
 
 ## Recommendation
 
-Given that rezo is already a llama.cpp + Metal app and we want agents,
+Given that rezon is already a llama.cpp + Metal app and we want agents,
 tools, and RAG eventually, **AutoAgents is the more structurally
 appropriate bet** - but only if we accept the v0.3 maturity cost.
 
@@ -108,5 +108,5 @@ evidence rather than speculation.
   Anthropic/OpenAI prompt caching?
 - For rig: how large is the lift to implement `CompletionModel` over the
   existing local worker?
-- What is the realistic timeline for tools/RAG in rezo? If it is "next
+- What is the realistic timeline for tools/RAG in rezon? If it is "next
   feature," integrate now. If it is "someday," defer.
