@@ -39,6 +39,8 @@ import { MessageBody, CopyButton } from "./MessageBody";
 import { Sidebar } from "./Sidebar";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { RightSidebar } from "./RightSidebar";
+import { NotesView } from "./notes/NotesView";
+import { loadAppMode, saveAppMode, type AppMode } from "./notes/vault";
 
 function ConfirmToolDialog({
   pending,
@@ -205,6 +207,10 @@ function App() {
   // ---- Settings ----
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mode, setMode] = useState<AppMode>(() => loadAppMode());
+  useEffect(() => {
+    saveAppMode(mode);
+  }, [mode]);
 
   // ---- Conversations ----
   const [conversations, setConversations] = useState<Conversation[]>(() =>
@@ -787,6 +793,52 @@ function App() {
       ? modelName(loadedPath)
       : "no model loaded";
 
+  const modeToggle = (
+    <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border-soft p-0.5 text-[11px]">
+      <button
+        type="button"
+        className={`cursor-pointer rounded border-none px-2 py-0.5 text-inherit ${
+          mode === "chat" ? "bg-accent text-white" : "bg-transparent"
+        }`}
+        onClick={() => setMode("chat")}
+      >
+        Chat
+      </button>
+      <button
+        type="button"
+        className={`cursor-pointer rounded border-none px-2 py-0.5 text-inherit ${
+          mode === "notes" ? "bg-accent text-white" : "bg-transparent"
+        }`}
+        onClick={() => setMode("notes")}
+      >
+        Notes
+      </button>
+    </div>
+  );
+
+  if (mode === "notes") {
+    return (
+      <Tooltip.Provider delay={300} timeout={150}>
+        <div className="flex h-screen flex-col">
+          <header className="flex items-center justify-between border-b border-border-soft px-3 py-2">
+            <span className="font-semibold">Rezon · notes</span>
+            {modeToggle}
+          </header>
+          <div className="flex min-h-0 flex-1">
+            <NotesView />
+          </div>
+          <SettingsDrawer
+            open={settingsOpen}
+            settings={settings}
+            onChange={setSettings}
+            onClose={() => setSettingsOpen(false)}
+            tools={tools}
+          />
+        </div>
+      </Tooltip.Provider>
+    );
+  }
+
   return (
     <Tooltip.Provider delay={300} timeout={150}>
       <div className="flex h-screen">
@@ -811,7 +863,7 @@ function App() {
             className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
             title={current?.title}
           >
-            {current?.title ?? "rezon"}
+            {current?.title ?? "Rezon"}
           </span>
           <span
             className="overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-normal opacity-60"
@@ -819,6 +871,7 @@ function App() {
           >
             {headerLabel}
           </span>
+          {modeToggle}
         </header>
 
         {loadError && (

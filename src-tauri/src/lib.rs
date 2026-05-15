@@ -1,5 +1,7 @@
 pub mod agent;
 mod llm;
+mod search;
+mod vault;
 
 use tauri::menu::{
     AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
@@ -13,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(llm::LlmState::default())
         .manage(agent::commands::AgentState::default())
+        .manage(search::SearchState::default())
         .invoke_handler(tauri::generate_handler![
             llm::load_model,
             llm::model_status,
@@ -23,6 +26,17 @@ pub fn run() {
             agent::commands::cancel_agent,
             agent::commands::confirm_tool_call,
             agent::commands::tools_catalog,
+            vault::vault_list_tree,
+            vault::vault_read,
+            vault::vault_write,
+            vault::vault_create,
+            vault::vault_mkdir,
+            vault::vault_delete,
+            vault::vault_rename,
+            vault::vault_resolve_wikilink,
+            search::vault_search,
+            search::vault_index_open,
+            search::vault_index_touch,
         ])
         .setup(|app| {
             // ---- Native menu (macOS app menu + Edit) ----
@@ -30,12 +44,12 @@ pub fn run() {
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
-            let about_metadata = AboutMetadataBuilder::new().name(Some("Rezo")).build();
+            let about_metadata = AboutMetadataBuilder::new().name(Some("Rezon")).build();
 
-            let app_menu = SubmenuBuilder::new(app, "Rezo")
+            let app_menu = SubmenuBuilder::new(app, "Rezon")
                 .item(&PredefinedMenuItem::about(
                     app,
-                    Some("About Rezo"),
+                    Some("About Rezon"),
                     Some(about_metadata),
                 )?)
                 .separator()
@@ -96,6 +110,7 @@ pub fn run() {
             // exits promptly.
             handle.state::<agent::commands::AgentState>().shutdown();
             handle.state::<llm::LlmState>().shutdown();
+            handle.state::<search::SearchState>().shutdown();
         }
     });
 }

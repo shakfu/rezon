@@ -182,3 +182,72 @@ html, body, #root {
 }
 .dot-pulse { animation: dot-pulse 1.2s infinite ease-in-out; }
 
+/* ---- Milkdown editor surface ---- */
+.milkdown {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--fg);
+}
+.milkdown .ProseMirror {
+  outline: none;
+  min-height: 60vh;
+}
+.milkdown .ProseMirror p { margin: 0.6em 0; }
+.milkdown .ProseMirror h1 { font-size: 1.7em; font-weight: 700; margin: 0.8em 0 0.4em; }
+.milkdown .ProseMirror h2 { font-size: 1.4em; font-weight: 700; margin: 0.8em 0 0.4em; }
+.milkdown .ProseMirror h3 { font-size: 1.2em; font-weight: 600; margin: 0.7em 0 0.3em; }
+.milkdown .ProseMirror ul,
+.milkdown .ProseMirror ol { padding-left: 1.6em; margin: 0.4em 0; }
+.milkdown .ProseMirror ul { list-style: disc outside; }
+.milkdown .ProseMirror ul ul { list-style: circle outside; }
+.milkdown .ProseMirror ul ul ul { list-style: square outside; }
+.milkdown .ProseMirror ol { list-style: decimal outside; }
+.milkdown .ProseMirror li { margin: 0.15em 0; }
+.milkdown .ProseMirror li > p { margin: 0; }
+.milkdown .ProseMirror code {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.milkdown .ProseMirror pre {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: 0.8em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.milkdown .ProseMirror blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.8em;
+  margin: 0.5em 0;
+  color: var(--fg-dim);
+}
+.milkdown .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border-soft);
+  margin: 1em 0;
+}
+.milkdown .ProseMirror a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---- Wikilinks ---- */
+.milkdown a.wikilink {
+  color: var(--accent);
+  background: var(--accent-soft);
+  text-decoration: none;
+  padding: 0 0.2em;
+  border-radius: 3px;
+  cursor: text;
+}
+.milkdown a.wikilink:hover {
+  text-decoration: underline;
+}
+
