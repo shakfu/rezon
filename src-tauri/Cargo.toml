@@ -33,6 +33,7 @@ async-trait = "0.1"
 thiserror = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
 notify = "6"
 sha2 = "0.10"
 

@@ -86,6 +86,41 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
       Risk: a large `web_fetch` body in conversation history can blow
       past the localStorage quota.
 
+## Notes / vault
+
+- [ ] **Persist `active_vault` across restarts.** Today it's only set in
+      memory when the FE calls `vault_index_open`. Until the user opens
+      the Notes tab once after launch, the `search_notes` agent tool
+      replies "no vault is open". Save under `app_config_dir` (same
+      pattern as `last_model.txt`) and restore on startup.
+- [ ] **Auto-switch the search toggle off Semantic when the embedding
+      model unloads.** Currently the segment becomes disabled but the
+      mode stays selected; queries silently return empty.
+- [ ] **Surface KNN distance/score to the model in `search_notes`.**
+      Tool returns ordered results without scores today; adding the
+      raw distance (and the snippet's char range) lets the model rank
+      and cite more precisely.
+- [ ] **Persist `vec_chunks` across embedding-model swaps when dim
+      matches.** Today any model change with a different `n_embd` is
+      handled (drop + re-embed); a swap to a same-dim but
+      different-tokenizer model silently produces drift. Record a
+      model fingerprint alongside `embed_dim` in `meta` and require an
+      explicit user re-embed when it changes.
+- [ ] **Embedder batching.** `embed_one` runs one decode per chunk.
+      Batch up to N chunks per decode using multiple `seq_id`s — cheap
+      win on Metal once a vault gets large.
+- [ ] **Backlinks panel.** vec table now has chunk text + paths; a
+      sibling table indexed by wikilink target opens up Obsidian-style
+      "linked mentions" without much new schema. Probably belongs
+      under `notes` rather than `search`.
+- [ ] **Editor jump-to-chunk.** Snippets carry `char_start/char_end`
+      in `chunks` but neither the related panel nor the search results
+      use them; clicking a hit could scroll the Milkdown editor to the
+      matching range.
+- [ ] **Hybrid search.** Combine FTS5 BM25 + vector KNN with
+      reciprocal rank fusion (or similar) for a single "Search" mode.
+      Replaces the Text/Semantic toggle.
+
 ## Engineering
 
 - [ ] Actual Rust tests (`make test` runs `cargo test` but `llm.rs` has none).

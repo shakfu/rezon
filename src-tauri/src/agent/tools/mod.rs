@@ -4,6 +4,7 @@
 
 pub mod current_time;
 pub mod file_read;
+pub mod search_notes;
 pub mod shell_exec;
 pub mod web_fetch;
 
@@ -16,6 +17,7 @@ pub fn default_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Arc::new(current_time::CurrentTime));
     reg.register(Arc::new(file_read::FileRead));
+    reg.register(Arc::new(search_notes::SearchNotes));
     reg.register(Arc::new(web_fetch::WebFetch));
     reg.register(Arc::new(shell_exec::ShellExec));
     reg

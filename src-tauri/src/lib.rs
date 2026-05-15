@@ -1,4 +1,5 @@
 pub mod agent;
+mod embed;
 mod llm;
 mod search;
 mod vault;
@@ -10,12 +11,18 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // sqlite-vec is registered as a SQLite auto-extension *before* any
+    // Connection is opened. Every connection opened thereafter
+    // (rusqlite or otherwise) gets `vec_*` and `vec0` available.
+    search::register_sqlite_vec();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(llm::LlmState::default())
         .manage(agent::commands::AgentState::default())
         .manage(search::SearchState::default())
+        .manage(embed::EmbedState::default())
         .invoke_handler(tauri::generate_handler![
             llm::load_model,
             llm::model_status,
@@ -37,6 +44,10 @@ pub fn run() {
             search::vault_search,
             search::vault_index_open,
             search::vault_index_touch,
+            search::vault_related,
+            embed::embed_load_model,
+            embed::embed_status,
+            embed::vault_search_semantic,
         ])
         .setup(|app| {
             // ---- Native menu (macOS app menu + Edit) ----
@@ -88,13 +99,23 @@ pub fn run() {
                 }
             });
 
-            // ---- Auto-load last model ----
+            // ---- Auto-load last models ----
             let handle = app.handle().clone();
             if let Some(path) = llm::read_last_model(&handle) {
+                let h = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = llm::do_load(&handle, path).await {
+                    if let Err(e) = llm::do_load(&h, path).await {
                         eprintln!("auto-load failed: {e}");
-                        let _ = handle.emit("model-load-error", e);
+                        let _ = h.emit("model-load-error", e);
+                    }
+                });
+            }
+            if let Some(path) = embed::read_last_embed_model(&handle) {
+                let h = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = embed::do_load_embed(&h, path).await {
+                        eprintln!("embed auto-load failed: {e}");
+                        let _ = h.emit("embed-load-error", e);
                     }
                 });
             }
@@ -110,6 +131,7 @@ pub fn run() {
             // exits promptly.
             handle.state::<agent::commands::AgentState>().shutdown();
             handle.state::<llm::LlmState>().shutdown();
+            handle.state::<embed::EmbedState>().shutdown();
             handle.state::<search::SearchState>().shutdown();
         }
     });

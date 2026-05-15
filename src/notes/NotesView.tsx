@@ -5,6 +5,8 @@ import {
   basename,
   createFile,
   deletePath,
+  embedLoadModel,
+  embedStatus,
   indexOpen,
   indexTouch,
   listTree,
@@ -13,14 +15,18 @@ import {
   loadVaultPath,
   mkdir,
   readFile,
+  related as fetchRelated,
   renamePath,
   resolveWikilink,
   saveActiveTab,
   saveOpenTabs,
   saveVaultPath,
   search as searchVault,
+  searchSemantic,
   stripMdExt,
   writeFile,
+  type EmbedStatus,
+  type RelatedHit,
   type SearchHit,
 } from "./vault";
 import { FileTree, type CtxTarget } from "./FileTree";
@@ -57,9 +63,18 @@ export function NotesView() {
     { x: number; y: number; target: CtxTarget } | null
   >(null);
   const [filter, setFilter] = useState("");
-  // "filter" -> name-only client filter (current behavior).
+  const [embed, setEmbed] = useState<EmbedStatus>({
+    loaded: false,
+    path: null,
+    dim: null,
+  });
+  const [relatedHits, setRelatedHits] = useState<RelatedHit[]>([]);
+  // "filter" -> name-only client filter (instant, no IPC).
   // "search" -> debounced FTS5 call returning content snippets.
-  const [searchMode, setSearchMode] = useState<"filter" | "search">("filter");
+  // "semantic" -> debounced vector KNN; requires an embedding model.
+  const [searchMode, setSearchMode] = useState<
+    "filter" | "search" | "semantic"
+  >("filter");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const searchSeq = useRef(0);
@@ -74,6 +89,26 @@ export function NotesView() {
     } catch (e) {
       setError(String(e));
     }
+  }, []);
+
+  // Track embed-model status. Polled lightly so the panel updates
+  // when auto-load on app start finishes and when the user picks a
+  // model from the dialog below.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => {
+      embedStatus()
+        .then((s) => {
+          if (alive) setEmbed(s);
+        })
+        .catch(() => {});
+    };
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, []);
 
   // Initial load: tree + previously open tabs.
@@ -106,6 +141,21 @@ export function NotesView() {
   useEffect(() => {
     saveActiveTab(activePath);
   }, [activePath]);
+
+  const pickEmbedModel = useCallback(async () => {
+    const picked = await openDialog({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "GGUF embedding model", extensions: ["gguf"] }],
+    });
+    if (typeof picked !== "string") return;
+    try {
+      const next = await embedLoadModel(picked);
+      setEmbed(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
 
   const pickVault = useCallback(async () => {
     const picked = await openDialog({ directory: true, multiple: false });
@@ -321,11 +371,37 @@ export function NotesView() {
     [tabs, activePath],
   );
 
+  // Related-notes refresh: triggered when the active file or embed
+  // status changes. Embeddings catch up in the background after a
+  // save; we re-fetch a couple seconds later so freshly-embedded
+  // chunks show up without a manual reload.
+  useEffect(() => {
+    if (!vault || !activePath || !embed.loaded) {
+      setRelatedHits([]);
+      return;
+    }
+    let cancelled = false;
+    const run = () => {
+      fetchRelated(vault, activePath, 8)
+        .then((hits) => {
+          if (!cancelled) setRelatedHits(hits);
+        })
+        .catch(() => {});
+    };
+    run();
+    // Retry once after embeddings have had a chance to catch up.
+    const t = setTimeout(run, 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [vault, activePath, embed.loaded, embed.path]);
+
   // Debounced FTS5 query. Each call gets a sequence number; only the
   // latest one is allowed to write into state, so out-of-order
   // resolutions can't overwrite fresh results.
   useEffect(() => {
-    if (searchMode !== "search" || !vault) {
+    if ((searchMode !== "search" && searchMode !== "semantic") || !vault) {
       setHits([]);
       setSearching(false);
       return;
@@ -338,8 +414,15 @@ export function NotesView() {
     }
     const seq = ++searchSeq.current;
     setSearching(true);
+    // Semantic queries do a model forward pass server-side, so debounce
+    // them harder than FTS5 to keep the embedder responsive.
+    const debounce = searchMode === "semantic" ? 350 : 200;
     const t = setTimeout(() => {
-      searchVault(vault, q)
+      const run =
+        searchMode === "semantic"
+          ? searchSemantic(vault, q)
+          : searchVault(vault, q);
+      run
         .then((rows) => {
           if (seq === searchSeq.current) {
             setHits(rows);
@@ -352,7 +435,7 @@ export function NotesView() {
             setSearching(false);
           }
         });
-    }, 200);
+    }, debounce);
     return () => clearTimeout(t);
   }, [filter, searchMode, vault]);
 
@@ -432,6 +515,18 @@ export function NotesView() {
             <button
               type="button"
               className="cursor-pointer border-none bg-transparent text-inherit"
+              onClick={pickEmbedModel}
+              title={
+                embed.loaded
+                  ? `Embed model: ${embed.path ?? "?"} (dim ${embed.dim ?? "?"})`
+                  : "Load embedding model (for related-notes)"
+              }
+            >
+              {embed.loaded ? "◆" : "◇"}
+            </button>
+            <button
+              type="button"
+              className="cursor-pointer border-none bg-transparent text-inherit"
               onClick={pickVault}
               title="Change vault"
             >
@@ -461,7 +556,24 @@ export function NotesView() {
               }`}
               onClick={() => setSearchMode("search")}
             >
-              Search
+              Text
+            </button>
+            <button
+              type="button"
+              disabled={!embed.loaded}
+              title={
+                embed.loaded
+                  ? "Vector similarity search"
+                  : "Load an embedding model first"
+              }
+              className={`flex-1 cursor-pointer rounded-sm border-none px-1 py-0.5 text-inherit disabled:cursor-not-allowed disabled:opacity-40 ${
+                searchMode === "semantic"
+                  ? "bg-accent text-white"
+                  : "bg-transparent"
+              }`}
+              onClick={() => setSearchMode("semantic")}
+            >
+              Semantic
             </button>
           </div>
           <input
@@ -469,7 +581,9 @@ export function NotesView() {
             placeholder={
               searchMode === "filter"
                 ? "Filter by name..."
-                : "Full-text search..."
+                : searchMode === "search"
+                  ? "Full-text search..."
+                  : "Semantic search..."
             }
             value={filter}
             onChange={(e) => setFilter(e.currentTarget.value)}
@@ -528,7 +642,8 @@ export function NotesView() {
           </form>
         )}
         <div className="flex-1 overflow-y-auto py-1">
-          {searchMode === "search" && filter.trim() !== "" ? (
+          {(searchMode === "search" || searchMode === "semantic") &&
+          filter.trim() !== "" ? (
             <SearchResults
               hits={hits}
               searching={searching}
@@ -612,6 +727,12 @@ export function NotesView() {
                 onChange={(md) => onEditorChange(activeTab.path, md)}
                 onWikilinkClick={onWikilinkClick}
               />
+              {embed.loaded && relatedHits.length > 0 && (
+                <RelatedPanel
+                  hits={relatedHits}
+                  onOpen={openPath}
+                />
+              )}
             </div>
           ) : (
             <div className="p-6 text-center opacity-50">
@@ -669,6 +790,45 @@ export function NotesView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function RelatedPanel({
+  hits,
+  onOpen,
+}: {
+  hits: RelatedHit[];
+  onOpen: (path: string) => void;
+}) {
+  return (
+    <div className="mt-8 border-t border-border-soft pt-4">
+      <div className="mb-2 text-[11px] uppercase tracking-wider text-fg-dim">
+        Related notes
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {hits.map((h) => (
+          <button
+            key={h.path}
+            type="button"
+            className="flex flex-col items-start gap-0.5 rounded-md border-none bg-bg-soft/50 px-3 py-2 text-left hover:bg-bg-soft"
+            onClick={() => onOpen(h.path)}
+            title={h.path}
+          >
+            <div className="flex w-full items-baseline justify-between gap-2">
+              <span className="truncate text-[12px] font-medium text-fg">
+                {stripMdExt(basename(h.path))}
+              </span>
+              <span className="shrink-0 font-mono text-[10px] text-fg-dim">
+                {h.score.toFixed(2)}
+              </span>
+            </div>
+            <span className="line-clamp-2 text-[11px] text-fg-dim">
+              {h.snippet}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

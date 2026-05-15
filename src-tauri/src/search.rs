@@ -27,12 +27,50 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager};
 
+/// Register sqlite-vec as a sqlite3 auto extension. Called exactly once at
+/// app boot. After this every `Connection::open` (including those created
+/// by `rusqlite::Connection::open`) has `vec_*` functions available and
+/// can `CREATE VIRTUAL TABLE ... USING vec0(...)`.
+pub fn register_sqlite_vec() {
+    unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )));
+    }
+}
+
 #[derive(Default)]
 pub struct SearchState {
     inner: Mutex<HashMap<String, Arc<Mutex<VaultIndex>>>>,
+    // The path of the vault the user most recently opened. Used by
+    // the `search_notes` agent tool, which has no FE-supplied vault
+    // argument and needs to resolve "the user's current vault" on its
+    // own. Set whenever `vault_index_open` is called.
+    active_vault: Mutex<Option<String>>,
 }
 
 impl SearchState {
+    pub fn active_vault(&self) -> Option<String> {
+        self.active_vault.lock().ok().and_then(|g| g.clone())
+    }
+
+    fn set_active_vault(&self, vault: &str) {
+        if let Ok(mut g) = self.active_vault.lock() {
+            *g = Some(vault.to_string());
+        }
+    }
+}
+
+impl SearchState {
+    /// Accessor for the embedder's catch-up loop: returns a snapshot
+    /// of the (vault path -> index) map so it can iterate without
+    /// holding the outer mutex across the entire pass.
+    pub fn inner_for_embed(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Mutex<VaultIndex>>>> {
+        self.inner.lock().unwrap()
+    }
+
     pub fn shutdown(&self) {
         let mut guard = self.inner.lock().unwrap();
         for (_, v) in guard.drain() {
@@ -44,7 +82,7 @@ impl SearchState {
     }
 }
 
-struct VaultIndex {
+pub struct VaultIndex {
     vault: PathBuf,
     db: Connection,
     // Held to keep the watcher alive. Dropping it stops notifications.
@@ -96,8 +134,53 @@ fn init_schema(db: &Connection) -> rusqlite::Result<()> {
             path UNINDEXED,
             content,
             tokenize='porter unicode61'
+         );
+         CREATE TABLE IF NOT EXISTS chunks (
+            id     INTEGER PRIMARY KEY,
+            path   TEXT NOT NULL,
+            ord    INTEGER NOT NULL,
+            char_start INTEGER NOT NULL,
+            char_end   INTEGER NOT NULL,
+            text   TEXT NOT NULL,
+            dirty  INTEGER NOT NULL DEFAULT 1
+         );
+         CREATE INDEX IF NOT EXISTS idx_chunks_path  ON chunks(path);
+         CREATE INDEX IF NOT EXISTS idx_chunks_dirty ON chunks(dirty);
+         CREATE TABLE IF NOT EXISTS meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
          );",
     )
+}
+
+/// Drop and recreate `vec_chunks` with the supplied dimension, and mark
+/// every chunk as dirty so the worker re-embeds them. Called when the
+/// loaded embedding model's dim differs from the value previously
+/// recorded in `meta`.
+fn reset_vec_table(db: &Connection, dim: usize) -> rusqlite::Result<()> {
+    db.execute("DROP TABLE IF EXISTS vec_chunks", [])?;
+    db.execute(
+        &format!(
+            "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[{dim}])"
+        ),
+        [],
+    )?;
+    db.execute("UPDATE chunks SET dirty = 1", [])?;
+    db.execute(
+        "INSERT INTO meta(key, value) VALUES('embed_dim', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![dim.to_string()],
+    )?;
+    Ok(())
+}
+
+fn current_embed_dim(db: &Connection) -> rusqlite::Result<Option<usize>> {
+    let v: Option<String> = db
+        .query_row("SELECT value FROM meta WHERE key='embed_dim'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(v.and_then(|s| s.parse().ok()))
 }
 
 fn is_markdown(p: &Path) -> bool {
@@ -141,6 +224,123 @@ fn file_meta(p: &Path) -> Option<(i64, i64)> {
     Some((mtime, size))
 }
 
+/// Split markdown text into overlapping chunks suitable for embedding.
+/// Strategy: split on blank-line boundaries to get paragraphs; greedily
+/// pack paragraphs into windows up to MAX_CHARS; carry the last
+/// paragraph of each window into the next for overlap. Markdown
+/// headings are treated as their own paragraph so window splits never
+/// land mid-heading.
+///
+/// Returns (char_start, char_end, text) tuples. char positions are
+/// byte offsets into the original string; the FE uses them to scroll
+/// to a chunk's location in the editor later.
+pub fn chunk_markdown(text: &str) -> Vec<(usize, usize, String)> {
+    const MAX_CHARS: usize = 1800;
+
+    // Split into paragraphs by blank lines, recording the byte range of
+    // each paragraph in the original string. Trailing whitespace on
+    // each paragraph is preserved so concatenation reproduces the
+    // original locally.
+    let mut paragraphs: Vec<(usize, usize, &str)> = Vec::new();
+    let mut start = 0usize;
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Find the next blank-line boundary: \n\n or end of input.
+        let rest = &text[i..];
+        if let Some(rel) = rest.find("\n\n") {
+            let end = i + rel;
+            if end > start {
+                paragraphs.push((start, end, &text[start..end]));
+            }
+            i = end + 2;
+            start = i;
+        } else {
+            paragraphs.push((start, text.len(), &text[start..]));
+            break;
+        }
+    }
+    if start < text.len() && paragraphs.last().map(|p| p.1) != Some(text.len()) {
+        paragraphs.push((start, text.len(), &text[start..]));
+    }
+
+    let mut out: Vec<(usize, usize, String)> = Vec::new();
+    let mut cur_start: Option<usize> = None;
+    let mut cur_end: usize = 0;
+    let mut cur_text = String::new();
+    let mut prev_para: Option<(usize, usize, &str)> = None;
+
+    let flush = |out: &mut Vec<(usize, usize, String)>,
+                 cur_start: &mut Option<usize>,
+                 cur_end: &mut usize,
+                 cur_text: &mut String| {
+        if let Some(s) = cur_start.take() {
+            if !cur_text.trim().is_empty() {
+                out.push((s, *cur_end, std::mem::take(cur_text)));
+            } else {
+                cur_text.clear();
+            }
+            *cur_end = 0;
+        }
+    };
+
+    for &(s, e, p) in &paragraphs {
+        let p_len = e - s;
+        // If a single paragraph itself exceeds MAX_CHARS, emit it on
+        // its own (no further splitting — embedding models truncate
+        // gracefully; we'd rather over-embed than fragment a code
+        // block or table mid-row).
+        if cur_text.len() + p_len > MAX_CHARS && !cur_text.is_empty() {
+            flush(&mut out, &mut cur_start, &mut cur_end, &mut cur_text);
+            // Start the next window with the previous paragraph as
+            // overlap, if it exists and isn't itself this paragraph.
+            if let Some((ps, pe, pt)) = prev_para {
+                if pe <= s {
+                    cur_start = Some(ps);
+                    cur_end = pe;
+                    cur_text.push_str(pt);
+                    cur_text.push_str("\n\n");
+                }
+            }
+        }
+        if cur_start.is_none() {
+            cur_start = Some(s);
+        }
+        cur_end = e;
+        cur_text.push_str(p);
+        cur_text.push_str("\n\n");
+        prev_para = Some((s, e, p));
+    }
+    flush(&mut out, &mut cur_start, &mut cur_end, &mut cur_text);
+    out
+}
+
+fn rewrite_chunks(db: &Connection, path: &Path, content: &str) -> rusqlite::Result<()> {
+    let path_str = path.to_string_lossy().to_string();
+    db.execute("DELETE FROM chunks WHERE path = ?1", params![path_str])?;
+    // vec_chunks rows are linked by chunks.id; chunks are about to
+    // disappear so the orphaned vec rows must go too. The table may
+    // not exist yet (no embedding model loaded) — ignore that case.
+    let _ = db.execute(
+        "DELETE FROM vec_chunks WHERE rowid IN (SELECT id FROM chunks WHERE path = ?1)",
+        params![path_str],
+    );
+    let mut stmt = db.prepare(
+        "INSERT INTO chunks (path, ord, char_start, char_end, text, dirty)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1)",
+    )?;
+    for (ord, (start, end, text)) in chunk_markdown(content).into_iter().enumerate() {
+        stmt.execute(params![
+            path_str,
+            ord as i64,
+            start as i64,
+            end as i64,
+            text
+        ])?;
+    }
+    Ok(())
+}
+
 fn upsert_file(db: &Connection, path: &Path) -> rusqlite::Result<()> {
     let path_str = path.to_string_lossy().to_string();
     let (mtime, size) = match file_meta(path) {
@@ -172,6 +372,7 @@ fn upsert_file(db: &Connection, path: &Path) -> rusqlite::Result<()> {
         "INSERT INTO notes (path, content) VALUES (?1, ?2)",
         params![path_str, content],
     )?;
+    rewrite_chunks(db, path, &content)?;
     db.execute(
         "INSERT INTO files (path, mtime, size) VALUES (?1, ?2, ?3)
          ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size",
@@ -183,6 +384,11 @@ fn upsert_file(db: &Connection, path: &Path) -> rusqlite::Result<()> {
 fn remove_file(db: &Connection, path: &Path) -> rusqlite::Result<()> {
     let path_str = path.to_string_lossy().to_string();
     db.execute("DELETE FROM notes WHERE path = ?1", params![path_str])?;
+    let _ = db.execute(
+        "DELETE FROM vec_chunks WHERE rowid IN (SELECT id FROM chunks WHERE path = ?1)",
+        params![path_str],
+    );
+    db.execute("DELETE FROM chunks WHERE path = ?1", params![path_str])?;
     db.execute("DELETE FROM files WHERE path = ?1", params![path_str])?;
     Ok(())
 }
@@ -214,6 +420,11 @@ fn full_reindex(db: &Connection, vault: &Path) -> rusqlite::Result<()> {
     }
     for path_str in to_remove {
         db.execute("DELETE FROM notes WHERE path = ?1", params![path_str])?;
+        let _ = db.execute(
+            "DELETE FROM vec_chunks WHERE rowid IN (SELECT id FROM chunks WHERE path = ?1)",
+            params![path_str],
+        );
+        db.execute("DELETE FROM chunks WHERE path = ?1", params![path_str])?;
         db.execute("DELETE FROM files WHERE path = ?1", params![path_str])?;
     }
     Ok(())
@@ -327,21 +538,20 @@ fn get_or_open(
     Ok(idx)
 }
 
-#[tauri::command]
-pub fn vault_search(
-    app: AppHandle,
-    state: tauri::State<'_, SearchState>,
-    vault: String,
-    query: String,
-    limit: Option<u32>,
+/// FTS5 search implementation, called by both the Tauri command and
+/// internal consumers (the `search_notes` agent tool).
+pub fn vault_search_impl(
+    app: &AppHandle,
+    vault: &str,
+    query: &str,
+    limit: usize,
 ) -> Result<Vec<SearchHit>, String> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    let lim = limit.unwrap_or(50).clamp(1, 500) as i64;
-
-    let idx = get_or_open(&app, &state, &vault)?;
+    let state = app.state::<SearchState>();
+    let idx = get_or_open(app, &state, vault)?;
     let guard = idx.lock().map_err(|_| "search lock".to_string())?;
     // FTS5 MATCH wants its own query syntax. Quote each whitespace
     // token so user input like `foo bar` becomes `"foo" "bar"`, which
@@ -360,6 +570,7 @@ pub fn vault_search(
         return Ok(Vec::new());
     }
 
+    let lim = limit.clamp(1, 500) as i64;
     let mut stmt = guard
         .db
         .prepare(
@@ -388,6 +599,176 @@ pub fn vault_search(
 }
 
 #[tauri::command]
+pub fn vault_search(
+    app: AppHandle,
+    vault: String,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<SearchHit>, String> {
+    let lim = limit.unwrap_or(50) as usize;
+    vault_search_impl(&app, &vault, &query, lim)
+}
+
+// ---- Vector helpers (used by the embedder worker) -------------------
+
+#[derive(Debug, Clone)]
+pub struct DirtyChunk {
+    pub id: i64,
+    pub text: String,
+}
+
+/// Internal API for the embedder. Returns the (already-open) vault
+/// index for a path, opening it if needed.
+pub fn open_vault(
+    app: &AppHandle,
+    state: &SearchState,
+    vault: &str,
+) -> Result<Arc<Mutex<VaultIndex>>, String> {
+    get_or_open(app, state, vault)
+}
+
+impl VaultIndex {
+    pub fn ensure_vec_table(&self, dim: usize) -> Result<(), String> {
+        match current_embed_dim(&self.db).map_err(|e| e.to_string())? {
+            Some(d) if d == dim => Ok(()),
+            _ => reset_vec_table(&self.db, dim).map_err(|e| e.to_string()),
+        }
+    }
+
+    pub fn take_dirty_chunks(&self, limit: usize) -> Result<Vec<DirtyChunk>, String> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT id, text FROM chunks WHERE dirty = 1 ORDER BY id LIMIT ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok(DirtyChunk {
+                    id: r.get(0)?,
+                    text: r.get(1)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    /// Return the embedding dimension recorded in `meta`, if any. The
+    /// embedder uses this to skip work when no model has been loaded.
+    pub fn embed_dim(&self) -> Option<usize> {
+        current_embed_dim(&self.db).ok().flatten()
+    }
+
+    /// Run a KNN search against `vec_chunks` for an externally-supplied
+    /// query embedding (must already be L2-normalized to match
+    /// what we stored). Groups by file, returning at most one row per
+    /// path with the closest chunk's snippet. Used by both the
+    /// semantic-search FE command and the `search_notes` agent tool.
+    pub fn knn_search(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, String> {
+        let dim = match self.embed_dim() {
+            Some(d) => d,
+            None => return Ok(Vec::new()),
+        };
+        if query.len() != dim {
+            return Err(format!(
+                "query dim {} does not match index dim {}",
+                query.len(),
+                dim
+            ));
+        }
+        let mut blob: Vec<u8> = Vec::with_capacity(dim * 4);
+        for f in query {
+            blob.extend_from_slice(&f.to_le_bytes());
+        }
+        let k = (limit * 5).max(20) as i64;
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT c.path, c.text, v.distance FROM vec_chunks v
+                 JOIN chunks c ON c.id = v.rowid
+                 WHERE v.embedding MATCH ?1 AND k = ?2
+                 ORDER BY v.distance",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![blob, k], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut best: std::collections::HashMap<String, (f64, String)> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (p, text, dist) = row.map_err(|e| e.to_string())?;
+            let entry = best.entry(p).or_insert((f64::INFINITY, String::new()));
+            if dist < entry.0 {
+                entry.0 = dist;
+                let snippet = if text.chars().count() > 200 {
+                    let mut s: String = text.chars().take(200).collect();
+                    s.push('…');
+                    s
+                } else {
+                    text
+                };
+                entry.1 = snippet;
+            }
+        }
+        let mut ranked: Vec<(f64, String, String)> = best
+            .into_iter()
+            .map(|(path, (dist, snippet))| (dist, path, snippet))
+            .collect();
+        ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(limit);
+        Ok(ranked
+            .into_iter()
+            .map(|(_d, path, snippet)| SearchHit { path, snippet })
+            .collect())
+    }
+
+    pub fn write_embeddings(&self, rows: &[(i64, Vec<f32>)]) -> Result<(), String> {
+        let tx = self
+            .db
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        for (id, emb) in rows {
+            // vec0 stores fixed-length float arrays; serialize as the
+            // raw little-endian byte buffer that sqlite-vec expects.
+            let mut buf: Vec<u8> = Vec::with_capacity(emb.len() * 4);
+            for f in emb {
+                buf.extend_from_slice(&f.to_le_bytes());
+            }
+            tx.execute(
+                "DELETE FROM vec_chunks WHERE rowid = ?1",
+                params![id],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?1, ?2)",
+                params![id, buf],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE chunks SET dirty = 0 WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
 pub fn vault_index_open(
     app: AppHandle,
     state: tauri::State<'_, SearchState>,
@@ -397,7 +778,139 @@ pub fn vault_index_open(
     // calls this when the user picks a vault so the watcher is
     // running before the first search.
     let _ = get_or_open(&app, &state, &vault)?;
+    state.set_active_vault(&vault);
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct RelatedHit {
+    pub path: String,
+    pub score: f32,
+    pub snippet: String,
+}
+
+/// "Related notes" for the file at `path`: averages its non-dirty
+/// chunk embeddings into a single query vector, runs a KNN against
+/// `vec_chunks`, groups by file, and returns the best chunk-snippet
+/// per file. Returns an empty list when the model isn't loaded or the
+/// file has no embedded chunks yet.
+#[tauri::command]
+pub fn vault_related(
+    app: AppHandle,
+    state: tauri::State<'_, SearchState>,
+    vault: String,
+    path: String,
+    limit: Option<u32>,
+) -> Result<Vec<RelatedHit>, String> {
+    let lim = limit.unwrap_or(8).clamp(1, 50) as i64;
+    let idx = get_or_open(&app, &state, &vault)?;
+    let guard = idx.lock().map_err(|_| "related lock".to_string())?;
+    let db = &guard.db;
+
+    let dim = match current_embed_dim(db).map_err(|e| e.to_string())? {
+        Some(d) => d,
+        None => return Ok(Vec::new()),
+    };
+
+    // Compute mean embedding for the source file. We pull the raw
+    // BLOBs (little-endian f32) for the file's chunks via a join.
+    let mut stmt = db
+        .prepare(
+            "SELECT v.embedding FROM vec_chunks v
+             JOIN chunks c ON c.id = v.rowid
+             WHERE c.path = ?1 AND c.dirty = 0",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![path], |r| r.get::<_, Vec<u8>>(0))
+        .map_err(|e| e.to_string())?;
+
+    let mut sum: Vec<f32> = vec![0.0; dim];
+    let mut count = 0usize;
+    for r in rows {
+        let buf = r.map_err(|e| e.to_string())?;
+        if buf.len() != dim * 4 {
+            continue;
+        }
+        for (i, chunk) in buf.chunks_exact(4).enumerate() {
+            let v = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            sum[i] += v;
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    for v in &mut sum {
+        *v /= count as f32;
+    }
+    // L2-normalize so cosine distance aligns with vec0's default L2.
+    let norm: f32 = sum.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut sum {
+            *v /= norm;
+        }
+    }
+    let mut query_blob: Vec<u8> = Vec::with_capacity(dim * 4);
+    for f in &sum {
+        query_blob.extend_from_slice(&f.to_le_bytes());
+    }
+
+    // Ask for more rows than `lim` so we have headroom to drop hits
+    // that point back at the source file.
+    let knn_k = (lim as usize * 5).max(20) as i64;
+    let mut stmt = db
+        .prepare(
+            "SELECT c.path, c.text, v.distance FROM vec_chunks v
+             JOIN chunks c ON c.id = v.rowid
+             WHERE v.embedding MATCH ?1 AND k = ?2
+             ORDER BY v.distance",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![query_blob, knn_k], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut best: std::collections::HashMap<String, (f64, String)> =
+        std::collections::HashMap::new();
+    for r in rows {
+        let (p, text, dist) = r.map_err(|e| e.to_string())?;
+        if p == path {
+            continue;
+        }
+        let entry = best.entry(p).or_insert((f64::INFINITY, String::new()));
+        if dist < entry.0 {
+            entry.0 = dist;
+            // Trim snippet to ~160 chars for the UI.
+            let snippet = if text.chars().count() > 160 {
+                let mut s: String = text.chars().take(160).collect();
+                s.push('…');
+                s
+            } else {
+                text
+            };
+            entry.1 = snippet;
+        }
+    }
+    let mut hits: Vec<RelatedHit> = best
+        .into_iter()
+        .map(|(path, (dist, snippet))| RelatedHit {
+            path,
+            // Convert L2 distance to a 0..1 similarity-ish score.
+            // sqlite-vec returns squared L2 for the default metric.
+            score: (1.0 / (1.0 + dist as f32)).clamp(0.0, 1.0),
+            snippet,
+        })
+        .collect();
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(lim as usize);
+    Ok(hits)
 }
 
 #[tauri::command]
@@ -411,7 +924,12 @@ pub fn vault_index_touch(
     // so the user sees fresh search results without waiting for the
     // notify event (which on macOS can lag).
     let idx = get_or_open(&app, &state, &vault)?;
-    let guard = idx.lock().map_err(|_| "touch lock".to_string())?;
-    let _ = upsert_file(&guard.db, Path::new(&path));
+    {
+        let guard = idx.lock().map_err(|_| "touch lock".to_string())?;
+        let _ = upsert_file(&guard.db, Path::new(&path));
+    }
+    // Drop the guard before signaling the embedder so the catch-up
+    // pass can lock the index immediately.
+    crate::embed::wake_catchup(&app);
     Ok(())
 }
