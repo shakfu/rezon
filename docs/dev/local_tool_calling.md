@@ -1,6 +1,6 @@
 # Local Tool Calling: Findings from the llama-cpp-2 Spike
 
-Empirical results from running `src-tauri/examples/local_tool_spike.rs`
+Empirical results from running `crates/rezon-web/examples/local_tool_spike.rs`
 against local GGUF models on Apple M1 with `llama-cpp-2` 0.1.146 and
 `llama-cpp-sys-2` 0.1.146 (Metal backend).
 
@@ -219,8 +219,8 @@ Verdict: **end-to-end working**, byte-compatible with `async-openai`'s
 
 ## Reference
 
-- Spike source: `src-tauri/examples/local_tool_spike.rs`
-- Runner: `src-tauri/examples/run_local_tool_spike.sh`
+- Spike source: `crates/rezon-web/examples/local_tool_spike.rs`
+- Runner: `crates/rezon-web/examples/run_local_tool_spike.sh`
 - Disable grammar to avoid the upstream crash:
   `NO_GRAMMAR=1 cargo run --example local_tool_spike -- <model.gguf>`
 - Library version: `llama-cpp-2 = 0.1.146` (Metal feature)

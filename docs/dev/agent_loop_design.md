@@ -10,9 +10,12 @@ illustrative; names and exact shapes are open for discussion.
 ## Module layout
 
 ```
-src-tauri/src/
+crates/rezon-core/src/      // provider-agnostic agent loop + types
   agent/
-    mod.rs           // public API + Tauri commands (agent_chat, cancel_agent)
+    mod.rs           // public API
+crates/rezon-web/src/        // Tauri shell
+  agent/
+    mod.rs           // re-exports + Tauri commands (agent_chat, cancel_agent)
     tool.rs          // Tool trait, ToolRegistry, ToolCall, ToolResult
     delta.rs         // normalized AgentDelta enum
     provider.rs      // Provider trait

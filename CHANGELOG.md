@@ -151,7 +151,47 @@ All notable changes to this project. Format loosely follows
   omits usage). `Token` and `Thinking` deltas both feed the
   counter. On `Done` / `Error` the title resets to `rezon`.
   Suppressed when stdout isn't a tty.
-- **Workspace hygiene** — `cargo fmt --all` clean and `cargo clippy
+- **`/conv` + `/conv list` disambiguation**: each entry now shows a
+  cyan-meta `(N msgs · 2h ago)` suffix. `Conversation` gained
+  `last_used: Option<u64>` (epoch ms) and a `touch()` helper called
+  whenever a turn lands or an import / fork / new is created. The
+  `/conv` picker sorts most-recently-used first while preserving
+  the correct store index on selection.
+- **FTS5-backed `/search`**: new module `conv_index.rs` (`ConvIndex`)
+  opens a SQLite database at `<config_dir>/conversations.db` with a
+  `conv_msgs(conv_id UNINDEXED, msg_idx UNINDEXED, role UNINDEXED,
+  content, tokenize='porter unicode61')` virtual table. Rebuilt
+  from the in-memory `Store` on launch; mutated in-place on every
+  turn (`replace_conv`), `/delete` (`delete_conv`), `/import` /
+  `/fork`. `cmd_search` translates the query into FTS5 syntax
+  (`tok*` prefix matching for word tokens, `"phrase"` quoting for
+  tokens with punctuation), and renders the matched snippet with
+  FTS5's `<<` / `>>` highlights. Linear walk still backs the
+  empty-query case and the index-unavailable fallback. Adds
+  `rusqlite = "0.32" features = ["bundled"]` as a direct rezon-tui
+  dep (matches rezon-core's version + features).
+- **Conversation tests** (3 new in `rezon-tui::conv_index`):
+  prefix vs phrase query construction, empty-query handling, and
+  a full insert / search / delete roundtrip over a temp DB.
+- **Markdown renderer expanded**: tables, links, strikethrough,
+  HTML, escapes, and footnote refs all now render. Tables collapse
+  into a box-glyph grid (`│ … │ … │` rows + `├─┼─┤` separator)
+  with column widths computed from the widest cell. Links render
+  as bright-blue anchor text followed by a dim `(url)`.
+  Strikethrough renders with the SGR strikethrough modifier. Raw
+  HTML (e.g. inline `<br>`) renders dim verbatim so it's visible
+  but distinct.
+- **Markdown renderer tests** (8 new in `rezon-tui::markdown`):
+  mismatched `*`, backtick escape, stray backticks, links,
+  `\*` escape, HTML pass-through, table grid, strikethrough.
+- **`ReplHelper::complete` tests** (8 new in `rezon-tui::input`):
+  empty line, `/` enumerates every command, prefix filters to
+  matching verbs, caret-inside-verb completion, no-completion
+  after non-path-taking verbs (`/exit foo`),
+  `FilenameCompleter` delegation past a path-taking verb
+  (`/load `), non-slash input yields nothing, plus a shared
+  `with_ctx` helper that wires a `rustyline::Context` over an
+  empty `DefaultHistory`.
   --workspace --all-targets -D warnings` clean. Lints fixed along
   the way:
   - `manual_flatten` in `core::search::vault_search_impl` — switched
@@ -224,6 +264,13 @@ All notable changes to this project. Format loosely follows
   `--config crates/rezon-web/tauri.conf.json` so
   `bun run tauri …` works standalone (no need to go through
   `make dev` / `make build`).
+- **`docs/dev/*.md` paths** — 6 stale `src-tauri/` references
+  rerouted to the workspace layout: `crates/rezon-web/examples/`
+  for the spike + ReAct prototype + tool-calling runner;
+  `crates/rezon-core/src/llm.rs` for the worker; the agent loop
+  doc now shows the core / web split (provider-agnostic types in
+  `crates/rezon-core/src/agent/`, Tauri command surface in
+  `crates/rezon-web/src/agent/`).
 - `SearchState::close_vault(path)` added in core so the TUI's
   `/vault close` actually drops the per-vault index + stops its
   file watcher (the GUI doesn't yet surface this).
@@ -232,6 +279,33 @@ All notable changes to this project. Format loosely follows
 - `make dev` / `make build` continue to work after the workspace
   refactor via the `--config $(TAURI_CONF)` flag passed to the
   Tauri CLI.
+- **Markdown re-render row-count went stale on terminal resize.**
+  `wait_for_turn` now captures `terminal_size()` into
+  `stream_width: Option<u16>` on the first streamed `Token` and
+  passes it into `rerender_markdown`. The visible rows were laid
+  out against that width; re-reading the width at `Done` time
+  after a mid-stream resize used to over- or under-clear and leak
+  stale rows.
+- **Spinner felt silent on multi-second loads.** `with_spinner`
+  records start time and appends a dim `(Ns)` suffix to every
+  frame so the user has a continuously-updating progress signal
+  even when the underlying `spawn_blocking` work doesn't emit
+  anything.
+- **Markdown renderer mis-fires.** Swapped the hand-rolled
+  state-machine parser for `pulldown-cmark` (default-features off;
+  `ENABLE_TABLES`/`STRIKETHROUGH`/`TASKLISTS`/`FOOTNOTES`). Fixes:
+  - `1 * 2 * 3` and similar arithmetic-looking prose no longer
+    triggers spurious italic — CommonMark's flanking rules refuse
+    the run.
+  - Trailing/mismatched `*` and stray backticks pass through as
+    literal characters instead of swallowing the rest of the line.
+  - Backslash escapes (`\*`, `` \` ``, `\\`) now render as the
+    intended literal character.
+  - HTML and `[text](url)` are no longer rendered verbatim — they
+    get distinct styles (dim for HTML, bright-blue text + dim
+    URL for links).
+  Public API (`render` / `count_rows`) is unchanged; the carried-
+  over hand-roll tests still pass alongside the 8 new ones.
 
 ## [Older entries]
 

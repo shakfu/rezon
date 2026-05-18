@@ -209,3 +209,132 @@ pub enum ReadOutcome {
     Interrupted,
     Eof,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustyline::history::DefaultHistory;
+    use rustyline::{Context as RlContext, history::History};
+
+    /// Spin up a rustyline `Context` over an empty history so the
+    /// completer can be called in isolation. The history reference
+    /// has to outlive the context, hence the inner closure pattern.
+    fn with_ctx<F: FnOnce(&RlContext<'_>)>(f: F) {
+        let history = DefaultHistory::new();
+        let ctx = RlContext::new(&history);
+        f(&ctx);
+        // Touch the history so the unused-`History`-import warning
+        // doesn't fire if/when rustyline ever stops requiring the
+        // trait import.
+        let _ = History::len(&history);
+    }
+
+    /// Convenience: run the helper's `complete` against a fixed
+    /// line + caret position, returning the matched replacements
+    /// only (rustyline emits `Pair { display, replacement }`).
+    fn complete(line: &str, pos: usize) -> Vec<String> {
+        let helper = ReplHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = RlContext::new(&history);
+        let (_, pairs) = helper.complete(line, pos, &ctx).expect("complete ok");
+        pairs.into_iter().map(|p| p.replacement).collect()
+    }
+
+    #[test]
+    fn empty_line_yields_no_completions() {
+        let results = complete("", 0);
+        assert!(results.is_empty(), "got: {results:?}");
+    }
+
+    #[test]
+    fn slash_alone_yields_every_command() {
+        let results = complete("/", 1);
+        // The full command list is fairly long; spot-check a few
+        // commands that should appear, and that the count matches
+        // the const.
+        for must_have in ["help", "exit", "conv", "model", "vault", "search"] {
+            assert!(
+                results.iter().any(|r| r == must_have),
+                "expected `{must_have}` in {results:?}"
+            );
+        }
+        assert_eq!(results.len(), COMMANDS.len(), "result count mismatch");
+    }
+
+    #[test]
+    fn prefix_filters_to_matching_commands() {
+        let results = complete("/h", 2);
+        // `h`, `help`, `history` all start with "h".
+        for expected in ["h", "help", "history"] {
+            assert!(
+                results.iter().any(|r| r == expected),
+                "expected `{expected}` in {results:?}"
+            );
+        }
+        // Nothing that doesn't start with "h" should be present.
+        for forbidden in ["exit", "model"] {
+            assert!(
+                !results.iter().any(|r| r == forbidden),
+                "did not expect `{forbidden}` in {results:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn caret_inside_verb_completes_only_the_verb() {
+        // Caret at position 3 of "/he" — should match anything
+        // starting with `he`.
+        let results = complete("/he", 3);
+        assert!(results.iter().any(|r| r == "help"));
+        assert!(results.iter().all(|r| r.starts_with("he")));
+    }
+
+    #[test]
+    fn caret_past_verb_for_non_path_command_yields_nothing() {
+        // `/exit ` — caret after the space, but `exit` isn't a
+        // path-taking verb, so nothing comes back.
+        let results = complete("/exit foo", 9);
+        assert!(results.is_empty(), "got: {results:?}");
+    }
+
+    #[test]
+    fn path_command_delegates_to_filename_completer_after_verb() {
+        // Path-taking verbs (load / embed / vault / note / export
+        // / import) should produce *something* once we're past the
+        // space — even with no real prefix, FilenameCompleter
+        // enumerates the current directory entries.
+        //
+        // Asserting the exact list would be brittle (depends on
+        // CWD), so we just confirm the completer returns Ok and
+        // the start offset moves past the verb portion.
+        let helper = ReplHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = RlContext::new(&history);
+        let line = "/load ";
+        let (start, _pairs) = helper
+            .complete(line, line.len(), &ctx)
+            .expect("filename completer ok");
+        // FilenameCompleter returns the byte offset where the
+        // replacement should start — must be at or past the verb +
+        // space (`/load ` is 6 bytes).
+        assert!(start >= 6, "got start={start}");
+    }
+
+    #[test]
+    fn non_slash_input_yields_nothing() {
+        // Anything that doesn't start with `/` is just chat input;
+        // we deliberately don't complete it (the model takes the
+        // raw string).
+        let results = complete("hello world", 5);
+        assert!(results.is_empty(), "got: {results:?}");
+    }
+
+    #[test]
+    fn unused_with_ctx_helper_still_works() {
+        // Sanity check the `with_ctx` helper — used as a template
+        // for future tests that want to share context plumbing.
+        with_ctx(|_| {
+            // ctx is alive here.
+        });
+    }
+}

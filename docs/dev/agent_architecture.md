@@ -1,6 +1,6 @@
 # Agent Architecture: Single-Agent Multi-Tool vs Multi-Agent
 
-Notes on what the ReAct prototype in `src-tauri/examples/react_agent.rs`
+Notes on what the ReAct prototype in `crates/rezon-web/examples/react_agent.rs`
 actually is, and how it compares to richer multi-agent patterns. Useful
 context for deciding what rezon should build next.
 

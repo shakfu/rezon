@@ -11,7 +11,7 @@ tools, and RAG are on the eventual roadmap.
   careful Metal teardown to avoid `__cxa_finalize` / `GGML_ASSERT`
   crashes during static destruction
 - Streaming via Tauri events (`chat-token`, `chat-stats`, `chat-done`)
-- ~753 lines in `src-tauri/src/llm.rs`
+- ~753 lines in `crates/rezon-core/src/llm.rs`
 - No tools, no RAG, no agents today
 
 ## Side-by-side
