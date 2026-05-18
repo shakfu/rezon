@@ -17,6 +17,27 @@ const SCHEMA_VERSION: u32 = 1;
 const UNTITLED: &str = "untitled";
 const TITLE_MAX_CHARS: usize = 48;
 
+/// Per-conversation overrides for provider / model / agent mode /
+/// reasoning visibility. `None` means "fall back to CLI defaults";
+/// the REPL composes effective settings on demand. All fields are
+/// optional + `#[serde(default)]` so older stores (which don't carry
+/// a `settings` field at all) load cleanly.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConversationSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_mode: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_thinking: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -25,6 +46,8 @@ pub struct Conversation {
     pub system: String,
     #[serde(default)]
     pub messages: Vec<ChatMsg>,
+    #[serde(default)]
+    pub settings: ConversationSettings,
 }
 
 impl Conversation {
@@ -42,6 +65,7 @@ impl Conversation {
             title: UNTITLED.to_string(),
             system,
             messages,
+            settings: ConversationSettings::default(),
         }
     }
 

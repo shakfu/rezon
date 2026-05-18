@@ -64,6 +64,11 @@ struct Cli {
     /// `/max-steps <n>`.
     #[arg(long, default_value_t = 8)]
     max_steps: usize,
+
+    /// Show agent reasoning ("thinking") blocks as they stream.
+    /// Toggle per-conversation with `/thinking on|off|toggle`.
+    #[arg(long)]
+    show_thinking: bool,
 }
 
 fn main() -> Result<()> {
@@ -122,6 +127,7 @@ async fn run(cli: Cli) -> Result<()> {
         cli.agent,
         cli.max_steps,
         vault,
+        cli.show_thinking,
     );
     repl.run().await
 }

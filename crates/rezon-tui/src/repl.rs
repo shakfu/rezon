@@ -58,9 +58,18 @@ const C_META: Style = fg(AnsiColor::BrightBlack);
 
 pub struct Repl {
     state: Arc<LlmState>,
-    chat_opts: ChatOpts,
+    /// Provider/model/api-key/base-url defaults from the CLI. Each
+    /// conversation can override individual fields via
+    /// `Conversation::settings`; effective values are composed via
+    /// `effective_chat_opts()`.
+    cli_chat_opts: ChatOpts,
     default_system: String,
-    agent_mode: bool,
+    /// Agent mode default from `--agent` at launch. Conversations
+    /// override via `Conversation::settings.agent_mode`.
+    cli_agent_mode: bool,
+    /// Reasoning-visibility default from `--show-thinking` at launch.
+    /// Conversations override via `Conversation::settings.show_thinking`.
+    cli_show_thinking: bool,
     max_steps: usize,
     store: Store,
     vault: VaultCtx,
@@ -72,6 +81,7 @@ pub struct Repl {
 }
 
 impl Repl {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: LlmState,
         chat_opts: ChatOpts,
@@ -80,13 +90,15 @@ impl Repl {
         agent_mode: bool,
         max_steps: usize,
         vault: VaultCtx,
+        show_thinking: bool,
     ) -> Self {
         let (ui_tx, ui_rx) = unbounded_channel();
         Self {
             state: Arc::new(state),
-            chat_opts,
+            cli_chat_opts: chat_opts,
             default_system,
-            agent_mode,
+            cli_agent_mode: agent_mode,
+            cli_show_thinking: show_thinking,
             max_steps,
             store,
             vault,
@@ -94,6 +106,35 @@ impl Repl {
             ui_rx,
             agent_handle: None,
         }
+    }
+
+    /// Compose ChatOpts from the active conversation's overrides on
+    /// top of CLI defaults.
+    fn effective_chat_opts(&self) -> ChatOpts {
+        let s = &self.store.active().settings;
+        let cli = &self.cli_chat_opts;
+        ChatOpts {
+            provider: s.provider.clone().unwrap_or_else(|| cli.provider.clone()),
+            model: s.model.clone().or_else(|| cli.model.clone()),
+            base_url: s.base_url.clone().or_else(|| cli.base_url.clone()),
+            api_key: s.api_key.clone().or_else(|| cli.api_key.clone()),
+        }
+    }
+
+    fn effective_agent_mode(&self) -> bool {
+        self.store
+            .active()
+            .settings
+            .agent_mode
+            .unwrap_or(self.cli_agent_mode)
+    }
+
+    fn effective_show_thinking(&self) -> bool {
+        self.store
+            .active()
+            .settings
+            .show_thinking
+            .unwrap_or(self.cli_show_thinking)
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -132,6 +173,20 @@ impl Repl {
                 continue;
             }
             if let Some(rest) = trimmed.strip_prefix('/') {
+                // Special-case `/clear` here so we have access to the
+                // local rustyline editor; calling its `clear_screen`
+                // resets the layout state the editor uses to redraw
+                // the next prompt cleanly.
+                if rest.trim() == "clear" {
+                    if let Some(e) = editor.as_mut() {
+                        let _ = e.clear_screen();
+                    }
+                    if io::stdout().is_terminal() {
+                        print!("\x1b[2J\x1b[H");
+                        anstream::stdout().flush().ok();
+                    }
+                    continue;
+                }
                 match self.handle_command(rest).await {
                     CmdResult::Continue => {}
                     CmdResult::Exit => break,
@@ -190,7 +245,7 @@ impl Repl {
             app = C_APP,
             reset = C_RESET,
         );
-        if self.agent_mode {
+        if self.effective_agent_mode() {
             println!(
                 "agent mode is on (use {app}/chat{reset} to disable)",
                 app = C_APP,
@@ -201,15 +256,16 @@ impl Repl {
     }
 
     fn header_model(&self) -> String {
-        if self.chat_opts.provider == "local" {
+        let opts = self.effective_chat_opts();
+        if opts.provider == "local" {
             if let Some(path) = self.state.status().path {
                 return basename(&path);
             }
             return "local".to_string();
         }
-        match &self.chat_opts.model {
-            Some(m) => format!("{}/{}", self.chat_opts.provider, m),
-            None => self.chat_opts.provider.clone(),
+        match &opts.model {
+            Some(m) => format!("{}/{}", opts.provider, m),
+            None => opts.provider.clone(),
         }
     }
 
@@ -224,7 +280,7 @@ impl Repl {
         });
         convo.maybe_auto_title();
 
-        if self.agent_mode {
+        if self.effective_agent_mode() {
             self.spawn_agent(user_input);
         } else {
             self.spawn_chat();
@@ -236,7 +292,7 @@ impl Repl {
 
     fn spawn_chat(&self) {
         let state = self.state.clone();
-        let opts = self.chat_opts.clone();
+        let opts = self.effective_chat_opts();
         let msgs = self.store.active().messages.clone();
         let sink: Arc<dyn ChatSink> = Arc::new(TuiChatSink::new(self.ui_tx.clone()));
         let tx = self.ui_tx.clone();
@@ -259,7 +315,7 @@ impl Repl {
         let vault_arg = self.vault.active_vault().is_some().then_some(&self.vault);
         match spawn_agent_run(
             self.state.clone(),
-            self.chat_opts.clone(),
+            self.effective_chat_opts(),
             history,
             user_input,
             self.ui_tx.clone(),
@@ -287,10 +343,28 @@ impl Repl {
                     let Some(ev) = ev else { break; };
                     match ev {
                         UiEvent::Token(s) => {
-                            print!("{s}");
+                            // If a thinking block left dim+italic
+                            // active, reset before the assistant
+                            // content streams in.
+                            print!("{C_RESET}{s}");
                             anstream::stdout().flush().ok();
                             assistant.push_str(&s);
                             newline_pending = !s.ends_with('\n');
+                        }
+                        UiEvent::Thinking(s) => {
+                            if self.effective_show_thinking() {
+                                // Dim + italic so reasoning is
+                                // visually distinct from the
+                                // final answer.
+                                print!("{C_DIM}{}", s);
+                                // We don't reset between deltas —
+                                // each chunk inherits the style;
+                                // we reset once a content Token
+                                // arrives (a noop write of the
+                                // reset escape).
+                                anstream::stdout().flush().ok();
+                                newline_pending = !s.ends_with('\n');
+                            }
                         }
                         UiEvent::Stats(s) => stats = Some(s),
                         UiEvent::Done => {
@@ -398,24 +472,28 @@ impl Repl {
             "rename" => self.cmd_rename(args),
             "delete" | "del" => self.cmd_delete(),
             "agent" => {
-                self.agent_mode = true;
-                println!("{meta}agent mode on{reset}", meta = C_META, reset = C_RESET);
+                self.store.active_mut().settings.agent_mode = Some(true);
+                self.save_ignore_err();
+                println!("{meta}agent mode on (for this conversation){reset}",
+                         meta = C_META, reset = C_RESET);
             }
             "chat" => {
-                self.agent_mode = false;
-                println!("{meta}chat mode{reset}", meta = C_META, reset = C_RESET);
+                self.store.active_mut().settings.agent_mode = Some(false);
+                self.save_ignore_err();
+                println!("{meta}chat mode (for this conversation){reset}",
+                         meta = C_META, reset = C_RESET);
             }
+            "thinking" => self.cmd_thinking(args),
             "model" => self.cmd_model(args),
             "provider" => self.cmd_provider(args),
             "max-steps" => self.cmd_max_steps(args),
             "system" => self.cmd_system(args).await,
             "load" => self.cmd_load(args).await,
             "history" => self.cmd_history(),
-            "clear" => {
-                if io::stdout().is_terminal() {
-                    print!("\x1b[2J\x1b[H");
-                }
-            }
+            // `/clear` is intercepted before handle_command runs so
+            // it can poke the rustyline editor; this branch only
+            // matches if something else accidentally routed here.
+            "clear" => {}
             "vault" => self.cmd_vault(args),
             "note" => self.cmd_note(args),
             "find" => self.cmd_find(args),
@@ -448,9 +526,16 @@ impl Repl {
         help_row("/next /prev", "cycle conversations");
         help_row("/rename <title>", "rename current conversation");
         help_row("/delete", "delete current conversation");
-        help_row("/agent /chat", "toggle agent loop");
-        help_row("/model <name>", "change model");
-        help_row("/provider <key>", "change provider");
+        help_row(
+            "/agent /chat",
+            "toggle agent loop (per conversation)",
+        );
+        help_row(
+            "/thinking on|off|toggle",
+            "show / hide agent reasoning (per conversation)",
+        );
+        help_row("/model <name>", "change model (per conversation)");
+        help_row("/provider <key>", "change provider (per conversation)");
         help_row(
             "/max-steps <n>",
             &format!("agent step cap (current: {})", self.max_steps),
@@ -590,20 +675,27 @@ impl Repl {
 
     fn cmd_model(&mut self, args: &str) {
         if args.is_empty() {
+            let eff = self
+                .effective_chat_opts()
+                .model
+                .unwrap_or_else(|| "<default>".to_string());
+            let conv_set = self.store.active().settings.model.is_some();
+            let suffix = if conv_set {
+                "(per-conversation override)"
+            } else {
+                "(inherited from CLI)"
+            };
             println!(
-                "{meta}current model: {}{reset}",
-                self.chat_opts
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "<default>".to_string()),
+                "{meta}model: {eff}  {suffix}{reset}",
                 meta = C_META,
-                reset = C_RESET,
+                reset = C_RESET
             );
             return;
         }
-        self.chat_opts.model = Some(args.to_string());
+        self.store.active_mut().settings.model = Some(args.to_string());
+        self.save_ignore_err();
         println!(
-            "{meta}model -> {args}{reset}",
+            "{meta}model -> {args} (for this conversation){reset}",
             meta = C_META,
             reset = C_RESET
         );
@@ -611,17 +703,48 @@ impl Repl {
 
     fn cmd_provider(&mut self, args: &str) {
         if args.is_empty() {
+            let eff = self.effective_chat_opts().provider;
+            let conv_set = self.store.active().settings.provider.is_some();
+            let suffix = if conv_set {
+                "(per-conversation override)"
+            } else {
+                "(inherited from CLI)"
+            };
             println!(
-                "{meta}current provider: {}{reset}",
-                self.chat_opts.provider,
+                "{meta}provider: {eff}  {suffix}{reset}",
                 meta = C_META,
                 reset = C_RESET
             );
             return;
         }
-        self.chat_opts.provider = args.to_string();
+        self.store.active_mut().settings.provider = Some(args.to_string());
+        self.save_ignore_err();
         println!(
-            "{meta}provider -> {args}{reset}",
+            "{meta}provider -> {args} (for this conversation){reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
+    }
+
+    fn cmd_thinking(&mut self, args: &str) {
+        let new_val = match args.trim() {
+            "on" | "show" => true,
+            "off" | "hide" => false,
+            "" | "toggle" => !self.effective_show_thinking(),
+            other => {
+                println!(
+                    "{err}unknown: /thinking {other}  (use: on / off / toggle){reset}",
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+                return;
+            }
+        };
+        self.store.active_mut().settings.show_thinking = Some(new_val);
+        self.save_ignore_err();
+        println!(
+            "{meta}thinking visibility: {} (for this conversation){reset}",
+            if new_val { "on" } else { "off" },
             meta = C_META,
             reset = C_RESET
         );
@@ -1128,7 +1251,14 @@ impl Repl {
                     user = C_USER,
                     reset = C_RESET
                 ),
-                "assistant" => println!("{}", m.content),
+                // Route assistant content through the same markdown
+                // renderer used for live streaming, so /history is
+                // formatted consistently with the in-flight display.
+                "assistant" => {
+                    let rendered = crate::markdown::render(&m.content);
+                    // `render` already ends in a newline.
+                    print!("{rendered}");
+                }
                 "system" => println!(
                     "{dim}[system] {}{reset}",
                     m.content,

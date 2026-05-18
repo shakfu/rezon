@@ -21,6 +21,9 @@ pub struct StatsLite {
 #[derive(Debug)]
 pub enum UiEvent {
     Token(String),
+    /// Reasoning ("thinking") delta. The REPL renders this in dim
+    /// italic when `show_thinking` is on; otherwise it's dropped.
+    Thinking(String),
     Stats(StatsLite),
     Done,
     Error(String),
@@ -87,7 +90,10 @@ impl EventSink for TuiAgentSink {
     fn emit(&self, event: AgentEvent) {
         let ui = match event {
             AgentEvent::Token(s) => UiEvent::Token(s),
-            AgentEvent::Thinking(_) => return,
+            // Forward thinking deltas to the REPL; the REPL decides
+            // whether to render them based on the active
+            // conversation's `show_thinking` setting.
+            AgentEvent::Thinking(s) => UiEvent::Thinking(s),
             AgentEvent::ToolStart { name, .. } => UiEvent::ToolStart { name },
             AgentEvent::ToolEnd {
                 ok, result, error, ..
