@@ -163,6 +163,16 @@ impl Repl {
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        // Wipe whatever startup noise reached the terminal (model
+        // load progress, any pre-init stderr that beat `void_logs`)
+        // so the chat starts from a clean top-of-screen. ANSI: erase
+        // screen + scrollback, home cursor. Gated on tty so piped
+        // output isn't polluted.
+        if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            print!("\x1b[2J\x1b[3J\x1b[H");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
         self.print_banner();
         // Auto-open the most recently used vault on launch.
         if let Some(path) = self.store.active_vault.clone() {
@@ -545,7 +555,7 @@ impl Repl {
                          meta = C_META, reset = C_RESET);
             }
             "thinking" => self.cmd_thinking(args),
-            "model" => self.cmd_model(args),
+            "model" => self.cmd_model(args).await,
             "provider" => self.cmd_provider(args),
             "max-steps" => self.cmd_max_steps(args),
             "system" => self.cmd_system(args).await,
@@ -565,6 +575,7 @@ impl Repl {
             "import" => self.cmd_import(args),
             "fork" => self.cmd_fork(),
             "models" => self.cmd_models(args),
+            "setup" => self.cmd_setup(),
             "" => {}
             other => {
                 println!(
@@ -599,8 +610,8 @@ impl Repl {
             "/thinking on|off|toggle",
             "show / hide agent reasoning (per conversation)",
         );
-        help_row("/model <name>", "change model (per conversation)");
-        help_row("/provider <key>", "change provider (per conversation)");
+        help_row("/model [name]", "picker over current provider's models (no arg) or set by name");
+        help_row("/provider [key]", "picker over providers (no arg) or set by key");
         help_row(
             "/max-steps <n>",
             &format!("agent step cap (current: {})", self.max_steps),
@@ -615,7 +626,8 @@ impl Repl {
         help_row("/export <path>", "write the active conversation to JSON");
         help_row("/import <path>", "load a JSON conversation as a new entry");
         help_row("/fork", "duplicate the active conversation");
-        help_row("/models [provider]", "list a provider's recommended models");
+        help_row("/models [provider]", "list models for current provider (or named provider)");
+        help_row("/setup", "re-run the first-launch configuration wizard");
         help_row("/tools", "list tools (✓ enabled · · disabled)");
         help_row(
             "/tools disable <name>",
@@ -773,23 +785,57 @@ impl Repl {
         println!("{meta}deleted{reset}", meta = C_META, reset = C_RESET);
     }
 
-    fn cmd_model(&mut self, args: &str) {
+    async fn cmd_model(&mut self, args: &str) {
         if args.is_empty() {
-            let eff = self
-                .effective_chat_opts()
-                .model
-                .unwrap_or_else(|| "<default>".to_string());
-            let conv_set = self.store.active().settings.model.is_some();
-            let suffix = if conv_set {
-                "(per-conversation override)"
-            } else {
-                "(inherited from CLI)"
+            // Picker over the current provider's models. For cloud
+            // providers, the list comes from `recommended_models` in
+            // `models.json`. For `local`, we scan the configured
+            // `models_dir` for `*.gguf` files.
+            let opts = self.effective_chat_opts();
+            let provider_key = opts.provider.clone();
+            let current = opts.model.clone();
+            if provider_key == "local" {
+                self.pick_local_model(current.as_deref()).await;
+                return;
+            }
+            let Some(def) = rezon_core::llm::cloud_provider_def(&provider_key) else {
+                println!(
+                    "{err}unknown provider: {provider_key}{reset}",
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+                return;
             };
-            println!(
-                "{meta}model: {eff}  {suffix}{reset}",
-                meta = C_META,
-                reset = C_RESET
-            );
+            if def.recommended_models.is_empty() {
+                println!(
+                    "{meta}no recommended models for {provider_key} — use /model <name>{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+                return;
+            }
+            let items: Vec<String> = def
+                .recommended_models
+                .iter()
+                .map(|m| {
+                    let active = current.as_deref() == Some(m.as_str());
+                    let default = m == &def.default_model;
+                    let marker = if active { "* " } else { "  " };
+                    let suffix = if default { "  (default)" } else { "" };
+                    format!("{marker}{m}{suffix}")
+                })
+                .collect();
+            let prompt = format!("model [{}] ", def.label);
+            if let Some(picked) = crate::picker::pick(items, &prompt, "") {
+                let name = def.recommended_models[picked].clone();
+                self.store.active_mut().settings.model = Some(name.clone());
+                self.save_ignore_err();
+                println!(
+                    "{meta}model -> {name} (for this conversation){reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            }
             return;
         }
         self.store.active_mut().settings.model = Some(args.to_string());
@@ -801,20 +847,124 @@ impl Repl {
         );
     }
 
-    fn cmd_provider(&mut self, args: &str) {
-        if args.is_empty() {
-            let eff = self.effective_chat_opts().provider;
-            let conv_set = self.store.active().settings.provider.is_some();
-            let suffix = if conv_set {
-                "(per-conversation override)"
-            } else {
-                "(inherited from CLI)"
-            };
+    /// Pick a local `*.gguf` file from the configured models dir.
+    /// "Configured" = `$REZON_MODELS_DIR` if set, otherwise the
+    /// `models_dir` field in the persisted store. Resolution and the
+    /// directory scan happen here (not in main) so a `/setup` mid-
+    /// session takes effect immediately.
+    async fn pick_local_model(&mut self, current: Option<&str>) {
+        let Some(dir) = effective_models_dir(&self.store) else {
             println!(
-                "{meta}provider: {eff}  {suffix}{reset}",
+                "{err}no models dir configured — set $REZON_MODELS_DIR or run /setup{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
+            return;
+        };
+        let path = std::path::Path::new(&dir);
+        let entries = match scan_gguf(path) {
+            Ok(v) => v,
+            Err(e) => {
+                println!(
+                    "{err}scan {}: {e}{reset}",
+                    path.display(),
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+                return;
+            }
+        };
+        if entries.is_empty() {
+            println!(
+                "{meta}no *.gguf files in {}{reset}",
+                path.display(),
                 meta = C_META,
                 reset = C_RESET
             );
+            return;
+        }
+        let items: Vec<String> = entries
+            .iter()
+            .map(|abs| {
+                let display = std::path::Path::new(abs)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(abs.as_str())
+                    .to_string();
+                let active = current == Some(abs.as_str());
+                let marker = if active { "* " } else { "  " };
+                format!("{marker}{display}")
+            })
+            .collect();
+        let prompt = format!("model [local · {}] ", path.display());
+        let Some(picked) = crate::picker::pick(items, &prompt, "") else {
+            return;
+        };
+        let picked_path = entries[picked].clone();
+        self.store.active_mut().settings.model = Some(picked_path.clone());
+        self.save_ignore_err();
+        // Eagerly load — the user picked, so they expect it ready
+        // for the next turn. If load fails, the setting still
+        // sticks so a later `/load` retry uses the same path.
+        let label = format!("loading {}", basename(&picked_path));
+        match crate::spinner::with_spinner(label, self.state.load(picked_path.clone())).await {
+            Ok(_) => {
+                persist_last_model_path(&picked_path);
+                println!(
+                    "{meta}model -> {picked_path} (loaded){reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            }
+            Err(e) => println!(
+                "{err}load {picked_path}: {e}{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            ),
+        }
+    }
+
+    fn cmd_provider(&mut self, args: &str) {
+        if args.is_empty() {
+            // Picker over every known provider, plus `local`. Current
+            // provider is marked `*`. `Other` (the user-configurable
+            // OpenAI-compatible slot) needs base_url + api_key to be
+            // useful, so we still expose it but the picker doesn't
+            // try to do the setup — that path is `/provider other`
+            // followed by env config.
+            let current = self.effective_chat_opts().provider;
+            let mut keys: Vec<String> = vec!["local".to_string()];
+            let mut labels: Vec<String> = vec!["Local (loaded GGUF)".to_string()];
+            for def in rezon_core::llm::cloud_providers_catalog() {
+                keys.push(def.key.clone());
+                labels.push(def.label.clone());
+            }
+            let items: Vec<String> = keys
+                .iter()
+                .zip(labels.iter())
+                .map(|(k, l)| {
+                    let active = k == &current;
+                    let marker = if active { "* " } else { "  " };
+                    format!("{marker}{k}  {meta}({l}){reset}",
+                        meta = C_META, reset = C_RESET)
+                })
+                .collect();
+            if let Some(picked) = crate::picker::pick(items, "provider ", "") {
+                let key = keys[picked].clone();
+                // Switching providers invalidates the per-conv model
+                // (the old name almost certainly isn't valid for the
+                // new provider). Clear it so the new provider's
+                // default kicks in — the user can override with
+                // /model afterwards.
+                self.store.active_mut().settings.provider = Some(key.clone());
+                self.store.active_mut().settings.model = None;
+                self.save_ignore_err();
+                println!(
+                    "{meta}provider -> {key} (for this conversation){reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            }
             return;
         }
         self.store.active_mut().settings.provider = Some(args.to_string());
@@ -910,11 +1060,14 @@ impl Repl {
         let label = format!("loading {}", basename(args));
         let result = crate::spinner::with_spinner(label, self.state.load(args.to_string())).await;
         match result {
-            Ok(_) => println!(
-                "{meta}local model loaded{reset}",
-                meta = C_META,
-                reset = C_RESET
-            ),
+            Ok(_) => {
+                persist_last_model_path(args);
+                println!(
+                    "{meta}local model loaded{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            }
             Err(e) => println!("{err}load: {e}{reset}", err = C_ERR, reset = C_RESET),
         }
     }
@@ -1401,15 +1554,59 @@ impl Repl {
     }
 
     fn cmd_export(&self, args: &str) {
-        if args.is_empty() {
-            println!(
-                "{err}usage: /export <path>{reset}",
-                err = C_ERR,
-                reset = C_RESET
-            );
-            return;
-        }
         let conv = self.store.active();
+        // Resolve the destination path. Three cases:
+        //   * absolute / contains `/` → use verbatim
+        //   * filename only + output_dir set → write under output_dir
+        //   * empty → auto-name from conv title under output_dir
+        // No output_dir + empty arg is still an error.
+        let target: std::path::PathBuf = if args.is_empty() {
+            let Some(dir) = self.store.output_dir.as_deref() else {
+                println!(
+                    "{err}usage: /export <path>  (or set an output dir via /setup){reset}",
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+                return;
+            };
+            let stem: String = conv
+                .title
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            let stem = if stem.trim_matches('-').is_empty() {
+                "conversation".to_string()
+            } else {
+                stem
+            };
+            std::path::Path::new(dir).join(format!("{stem}.json"))
+        } else {
+            let p = std::path::Path::new(args);
+            if p.is_absolute() || args.contains('/') {
+                p.to_path_buf()
+            } else if let Some(dir) = self.store.output_dir.as_deref() {
+                std::path::Path::new(dir).join(args)
+            } else {
+                p.to_path_buf()
+            }
+        };
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                println!(
+                    "{err}mkdir {}: {e}{reset}",
+                    parent.display(),
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+                return;
+            }
+        }
         let json = match serde_json::to_string_pretty(conv) {
             Ok(s) => s,
             Err(e) => {
@@ -1417,10 +1614,11 @@ impl Repl {
                 return;
             }
         };
-        match std::fs::write(args, json) {
+        match std::fs::write(&target, json) {
             Ok(_) => println!(
-                "{meta}exported {} -> {args}{reset}",
+                "{meta}exported {} -> {}{reset}",
                 conv.title,
+                target.display(),
                 meta = C_META,
                 reset = C_RESET
             ),
@@ -1488,24 +1686,65 @@ impl Repl {
     }
 
     fn cmd_models(&self, args: &str) {
+        // `/models` defaults to the *current* provider — it's a
+        // listing command, not a switcher. Pass `/models <key>` (or
+        // `/models local`) to look at a different provider's catalog
+        // without changing the active one.
         let provider_key = if args.is_empty() {
             self.effective_chat_opts().provider
         } else {
             args.to_string()
         };
         if provider_key == "local" {
-            match self.state.status().path {
-                Some(p) => println!(
-                    "{meta}local model loaded: {p}{reset}",
+            let dir = effective_models_dir(&self.store);
+            let header_dir = dir
+                .as_deref()
+                .unwrap_or("<unset — run /setup or set $REZON_MODELS_DIR>");
+            println!(
+                "{bold}Local{bold:#} {meta}({}){reset}",
+                header_dir,
+                bold = C_BOLD,
+                meta = C_META,
+                reset = C_RESET
+            );
+            let loaded_path = self.state.status().path;
+            if let Some(dir_str) = dir {
+                let dir_path = std::path::Path::new(&dir_str);
+                match scan_gguf(dir_path) {
+                    Ok(entries) if entries.is_empty() => println!(
+                        "  {meta}(no *.gguf files){reset}",
+                        meta = C_META,
+                        reset = C_RESET
+                    ),
+                    Ok(entries) => {
+                        for abs in &entries {
+                            let active = loaded_path.as_deref() == Some(abs.as_str());
+                            let marker = if active {
+                                format!("{C_APP}*{C_APP:#}")
+                            } else {
+                                " ".to_string()
+                            };
+                            let display = std::path::Path::new(abs)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or(abs.as_str());
+                            println!("  {marker} {display}");
+                        }
+                    }
+                    Err(e) => println!(
+                        "{err}scan {}: {e}{reset}",
+                        dir_path.display(),
+                        err = C_ERR,
+                        reset = C_RESET
+                    ),
+                }
+            }
+            if let Some(p) = loaded_path {
+                println!(
+                    "  {meta}(currently loaded: {p}){reset}",
                     meta = C_META,
                     reset = C_RESET
-                ),
-                None => println!(
-                    "{meta}no local model loaded · use {app}/load <gguf>{reset}",
-                    meta = C_META,
-                    app = C_APP,
-                    reset = C_RESET
-                ),
+                );
             }
             return;
         }
@@ -1543,6 +1782,12 @@ impl Repl {
         }
         if def.recommended_models.is_empty() {
             println!("  {meta}(no recommended list){reset}", meta = C_META, reset = C_RESET);
+        }
+    }
+
+    fn cmd_setup(&mut self) {
+        if let Err(e) = crate::setup::run_forced(&mut self.store) {
+            println!("{err}setup: {e}{reset}", err = C_ERR, reset = C_RESET);
         }
     }
 
@@ -1603,6 +1848,47 @@ impl Repl {
             eprintln!("save store: {e}");
         }
     }
+}
+
+/// Record `path` as the most-recently-loaded local model. Best-
+/// effort: filesystem failures are swallowed (a stale or absent
+/// `last_model.txt` only costs the user one extra `/model` pick on
+/// the next launch).
+fn persist_last_model_path(path: &str) {
+    if let Ok(d) = crate::store::config_dir() {
+        rezon_core::llm::persist_last_model(&d, path);
+    }
+}
+
+/// Resolve the active models dir. `$REZON_MODELS_DIR` wins so the
+/// user can override per-shell; otherwise we use the value the setup
+/// wizard persisted into the store. `None` means neither is set —
+/// callers should send the user to `/setup`.
+fn effective_models_dir(store: &crate::store::Store) -> Option<String> {
+    std::env::var("REZON_MODELS_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| store.models_dir.clone())
+}
+
+/// Non-recursive scan of `dir` for `*.gguf` files. Returns absolute
+/// paths sorted alphabetically. A missing directory yields `Ok(vec![])`
+/// rather than an error so callers can show the empty-list message
+/// instead of a stack trace.
+fn scan_gguf(dir: &std::path::Path) -> std::io::Result<Vec<String>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("gguf") {
+            out.push(path.to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 enum CmdResult {

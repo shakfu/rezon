@@ -68,7 +68,16 @@ impl LlmState {
         if let Some(b) = guard.as_ref() {
             return Ok(b.clone());
         }
-        let b = Arc::new(LlamaBackend::init().map_err(|e| anyhow!("backend init: {e}"))?);
+        // llama.cpp + ggml dump *a lot* of progress detail to stderr
+        // by default — model metadata, per-tensor allocation, metal
+        // kernel compilation, etc. The TUI puts a spinner on stdout
+        // during load and a clean banner afterwards, so this noise
+        // just trashes the UI. `void_logs` swaps in a no-op log
+        // callback globally (the upstream binding is process-wide,
+        // not per-backend).
+        let mut b = LlamaBackend::init().map_err(|e| anyhow!("backend init: {e}"))?;
+        b.void_logs();
+        let b = Arc::new(b);
         *guard = Some(b.clone());
         Ok(b)
     }
@@ -650,16 +659,32 @@ fn run_chat_with_cache(
         return Err("no new tokens to decode".to_string());
     }
 
-    let mut batch = LlamaBatch::new(to_add.len().max(512), 1);
+    // `llama_decode` aborts when a single batch carries more tokens
+    // than `cparams.n_batch`. For long histories the rendered prompt
+    // easily exceeds that (a 19-message chat trivially crosses 2048
+    // tokens), so we split `to_add` into n_batch-sized chunks and
+    // decode each in turn. Only the final token of the *whole*
+    // prompt needs `logits=true` — the sampler reads logits off the
+    // last position of the last chunk.
+    let n_batch = ctx.n_batch() as usize;
+    let chunk_cap = n_batch.max(1);
+    let mut batch = LlamaBatch::new(chunk_cap, 1);
     let last_idx = to_add.len() - 1;
-    for (i, t) in to_add.iter().enumerate() {
-        let pos = common as i32 + i as i32;
-        batch
-            .add(*t, pos, &[0], i == last_idx)
-            .map_err(|e| format!("batch.add prompt: {e}"))?;
+    let mut i = 0usize;
+    while i < to_add.len() {
+        let end = (i + chunk_cap).min(to_add.len());
+        batch.clear();
+        for j in i..end {
+            let pos = common as i32 + j as i32;
+            let is_last = j == last_idx;
+            batch
+                .add(to_add[j], pos, &[0], is_last)
+                .map_err(|e| format!("batch.add prompt: {e}"))?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("decode prompt: {e}"))?;
+        i = end;
     }
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("decode prompt: {e}"))?;
     cached.extend_from_slice(to_add);
 
     let mut sampler =
@@ -793,16 +818,32 @@ fn run_agent_with_cache(
         return Err(msg);
     }
 
-    let mut batch = LlamaBatch::new(to_add.len().max(512), 1);
+    // `llama_decode` aborts when a single batch carries more tokens
+    // than `cparams.n_batch`. For long histories the rendered prompt
+    // easily exceeds that (a 19-message chat trivially crosses 2048
+    // tokens), so we split `to_add` into n_batch-sized chunks and
+    // decode each in turn. Only the final token of the *whole*
+    // prompt needs `logits=true` — the sampler reads logits off the
+    // last position of the last chunk.
+    let n_batch = ctx.n_batch() as usize;
+    let chunk_cap = n_batch.max(1);
+    let mut batch = LlamaBatch::new(chunk_cap, 1);
     let last_idx = to_add.len() - 1;
-    for (i, t) in to_add.iter().enumerate() {
-        let pos = common as i32 + i as i32;
-        batch
-            .add(*t, pos, &[0], i == last_idx)
-            .map_err(|e| format!("batch.add prompt: {e}"))?;
+    let mut i = 0usize;
+    while i < to_add.len() {
+        let end = (i + chunk_cap).min(to_add.len());
+        batch.clear();
+        for j in i..end {
+            let pos = common as i32 + j as i32;
+            let is_last = j == last_idx;
+            batch
+                .add(to_add[j], pos, &[0], is_last)
+                .map_err(|e| format!("batch.add prompt: {e}"))?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("decode prompt: {e}"))?;
+        i = end;
     }
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("decode prompt: {e}"))?;
     cached.extend_from_slice(to_add);
 
     let mut sampler =

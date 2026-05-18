@@ -138,6 +138,18 @@ struct StoreFile {
     /// `ToolRegistry::without` before each agent run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     disabled_tools: Vec<String>,
+    /// First-launch wizard outputs. `setup_complete` is the gate that
+    /// keeps the wizard from re-firing on subsequent launches; the
+    /// paths default to env vars / config-dir locations but the user
+    /// can override them in the wizard or via /setup.
+    #[serde(default)]
+    setup_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    models_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_provider: Option<String>,
     conversations: Vec<Conversation>,
 }
 
@@ -150,6 +162,18 @@ pub struct Store {
     pub active_vault: Option<String>,
     /// User-disabled tools. Applied to every agent run's registry.
     pub disabled_tools: Vec<String>,
+    /// True once the first-launch wizard has been answered (even if
+    /// some fields were skipped). Re-runnable via `/setup`.
+    pub setup_complete: bool,
+    /// Directory holding local `*.gguf` files. Picker source for
+    /// `/model` / `/models` when provider is `local`.
+    pub models_dir: Option<String>,
+    /// Default destination directory for `/export <file>` when the
+    /// user supplies only a filename.
+    pub output_dir: Option<String>,
+    /// Provider chosen at setup time. Wins over CLI default; per-conv
+    /// override (`active().settings.provider`) still wins over this.
+    pub default_provider: Option<String>,
 }
 
 impl Store {
@@ -174,6 +198,10 @@ impl Store {
                             active,
                             active_vault: file.active_vault,
                             disabled_tools: file.disabled_tools,
+                            setup_complete: file.setup_complete,
+                            models_dir: file.models_dir,
+                            output_dir: file.output_dir,
+                            default_provider: file.default_provider,
                         },
                         true,
                     ));
@@ -188,6 +216,10 @@ impl Store {
                 active: 0,
                 active_vault: None,
                 disabled_tools: Vec::new(),
+                setup_complete: false,
+                models_dir: None,
+                output_dir: None,
+                default_provider: None,
             },
             false,
         ))
@@ -203,6 +235,10 @@ impl Store {
             active_id: self.conversations.get(self.active).map(|c| c.id.clone()),
             active_vault: self.active_vault.clone(),
             disabled_tools: self.disabled_tools.clone(),
+            setup_complete: self.setup_complete,
+            models_dir: self.models_dir.clone(),
+            output_dir: self.output_dir.clone(),
+            default_provider: self.default_provider.clone(),
             conversations: self.conversations.clone(),
         };
         let json = serde_json::to_vec_pretty(&file).context("serialize conversations")?;
@@ -257,9 +293,13 @@ impl Store {
 }
 
 fn config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("conversations.json"))
+}
+
+pub fn config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("com", "rezon", "rezon-tui")
         .context("could not resolve user config dir")?;
-    Ok(dirs.config_dir().join("conversations.json"))
+    Ok(dirs.config_dir().to_path_buf())
 }
 
 pub(crate) fn next_id() -> String {
@@ -286,6 +326,10 @@ mod tests {
             active: 0,
             active_vault: None,
             disabled_tools: Vec::new(),
+            setup_complete: false,
+            models_dir: None,
+            output_dir: None,
+            default_provider: None,
         }
     }
 
