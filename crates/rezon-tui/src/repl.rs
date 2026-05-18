@@ -171,9 +171,12 @@ impl Repl {
             .map(|(terminal_size::Width(w), _)| w as usize)
             .unwrap_or(80);
         let pad = width.saturating_sub(left_visible_len + model.chars().count());
+        // `rezon` is bold cyan in the banner; elsewhere `C_APP` stays
+        // non-bold so inline command refs (/help, /exit, …) don't
+        // shout.
+        let banner_app = C_APP.bold();
         println!(
-            "{app_color}{app}{reset}{version}{pad}{model}",
-            app_color = C_APP,
+            "{banner_app}{app}{reset}{version}{pad}{model}",
             reset = C_RESET,
             pad = " ".repeat(pad.max(2)),
         );
@@ -387,33 +390,42 @@ impl Repl {
     }
 
     fn cmd_help(&self) {
-        println!("{bold}commands{reset}", bold = C_BOLD, reset = C_RESET);
-        println!("  /help               this list");
-        println!("  /exit               quit");
-        println!("  /new                start a new conversation");
-        println!("  /conv               list conversations");
-        println!("  /conv <n>           switch to conversation n (1-indexed)");
-        println!("  /next /prev         cycle conversations");
-        println!("  /rename <title>     rename current conversation");
-        println!("  /delete             delete current conversation");
-        println!("  /agent /chat        toggle agent loop");
-        println!("  /model <name>       change model");
-        println!("  /provider <key>     change provider");
-        println!("  /max-steps <n>      agent step cap (current: {})", self.max_steps);
-        println!("  /system [text]      set system prompt (no arg shows current)");
-        println!("  /load <gguf>        load local model in-session");
-        println!("  /history            show current conversation history");
-        println!("  /search <query>     search across all conversations");
-        println!("  /clear              clear the screen");
+        // Each row is rendered via `help_row` so the verb (and any
+        // inline command refs in the description) is highlighted in
+        // cyan while the column alignment is preserved.
+        println!("{C_BOLD}commands{C_BOLD:#}");
+        help_row("/help", "this list");
+        help_row("/exit", "quit");
+        help_row("/new", "start a new conversation");
+        help_row("/conv", "list conversations");
+        help_row("/conv <n>", "switch to conversation n (1-indexed)");
+        help_row("/next /prev", "cycle conversations");
+        help_row("/rename <title>", "rename current conversation");
+        help_row("/delete", "delete current conversation");
+        help_row("/agent /chat", "toggle agent loop");
+        help_row("/model <name>", "change model");
+        help_row("/provider <key>", "change provider");
+        help_row(
+            "/max-steps <n>",
+            &format!("agent step cap (current: {})", self.max_steps),
+        );
+        help_row("/system [text]", "set system prompt (no arg shows current)");
+        help_row("/load <gguf>", "load local model in-session");
+        help_row("/history", "show current conversation history");
+        help_row("/search <query>", "search across all conversations");
+        help_row("/clear", "clear the screen");
         println!();
-        println!("{bold}vault{reset}", bold = C_BOLD, reset = C_RESET);
-        println!("  /vault              show open vault");
-        println!("  /vault <path>       open a vault directory (auto-opens next launch)");
-        println!("  /vault close        forget the saved vault path");
-        println!("  /note <path>        read a note from the vault (relative or absolute)");
-        println!("  /find <query>       search notes (semantic if /embed loaded, FTS5 otherwise)");
-        println!("  /embed              show embedding model status");
-        println!("  /embed <gguf>       load a local embedding model");
+        println!("{C_BOLD}vault{C_BOLD:#}");
+        help_row("/vault", "show open vault");
+        help_row("/vault <path>", "open a vault directory (auto-opens next launch)");
+        help_row("/vault close", "forget the saved vault path");
+        help_row("/note <path>", "read a note from the vault (relative or absolute)");
+        help_row(
+            "/find <query>",
+            "search notes (semantic if /embed loaded, FTS5 otherwise)",
+        );
+        help_row("/embed", "show embedding model status");
+        help_row("/embed <gguf>", "load a local embedding model");
     }
 
     fn cmd_new(&mut self) {
@@ -834,6 +846,33 @@ impl Repl {
 enum CmdResult {
     Continue,
     Exit,
+}
+
+/// Render a single `/help` row: the verb segment in cyan, the
+/// description in default fg. Splits on the first whitespace so a
+/// trailing `<arg>` or `[arg]` syntax stays in cyan along with the
+/// slash command, but multi-word usages like `/next /prev` still
+/// render both verbs in cyan.
+fn help_row(usage: &str, description: &str) {
+    // We word-split and colour each `/`-prefixed token cyan, others
+    // (placeholders like `<n>`, `[text]`, …) in default fg. Width
+    // is computed on the *plain* text so the SGR codes don't shift
+    // the description column.
+    const COLUMN: usize = 20;
+    let plain_width = usage.chars().count();
+    let pad = COLUMN.saturating_sub(plain_width);
+    let mut rendered = String::with_capacity(usage.len() + 16);
+    for (i, token) in usage.split(' ').enumerate() {
+        if i > 0 {
+            rendered.push(' ');
+        }
+        if token.starts_with('/') {
+            rendered.push_str(&format!("{C_APP}{token}{C_APP:#}"));
+        } else {
+            rendered.push_str(token);
+        }
+    }
+    println!("  {rendered}{pad}{description}", pad = " ".repeat(pad));
 }
 
 /// Inline-highlight every case-insensitive occurrence of `query` in

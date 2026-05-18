@@ -10,6 +10,7 @@
 // for each read so the async runtime never blocks on stdin.
 
 use std::borrow::Cow;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -113,18 +114,20 @@ impl Completer for ReplHelper {
 
 // Prompt styling via `highlight_prompt`: rustyline measures width
 // from the plain prompt we pass into `readline`, then renders the
-// styled version returned here. This keeps the cursor anchored even
-// when the prompt contains SGR codes. Line highlighting (styling the
-// user's typed text) is intentionally left at the default — the
-// version of rustyline we use counts highlighted-line escape bytes
-// against displayed width, so any custom impl drifts the cursor.
+// styled version returned here. We deliberately leave the SGR open
+// (no trailing `\x1b[0m`) so the terminal stays in bold-white while
+// rustyline draws the input buffer — typed characters inherit the
+// style without a separate Highlighter::highlight impl (which the
+// crate's layout calc doesn't fully discount for ANSI bytes,
+// drifting the cursor). `read_line` emits the reset after `readline`
+// returns so subsequent assistant output isn't tinted.
 impl Highlighter for ReplHelper {
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
         &'s self,
         prompt: &'p str,
         _default: bool,
     ) -> Cow<'b, str> {
-        Cow::Owned(format!("\x1b[1;97m{prompt}\x1b[0m"))
+        Cow::Owned(format!("\x1b[1;97m{prompt}"))
     }
 }
 
@@ -178,6 +181,12 @@ pub async fn read_line(slot: &mut Option<ReplEditor>, prompt: String) -> ReadOut
         Err(_) => return ReadOutcome::Eof,
     };
     *slot = Some(editor);
+    // Restore default SGR so the assistant response isn't tinted by
+    // the bold-white state the prompt left open. Written directly
+    // via `anstream::stdout()` so it's stripped on non-tty.
+    let mut out = anstream::stdout().lock();
+    let _ = out.write_all(b"\x1b[0m");
+    let _ = out.flush();
     match result {
         Ok(line) => ReadOutcome::Line(line),
         // Ctrl-C aborts the current line buffer; loop continues with a
