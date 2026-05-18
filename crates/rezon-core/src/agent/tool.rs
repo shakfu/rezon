@@ -6,6 +6,7 @@
 //   - async-openai's `tools` field
 //   - llama-cpp-2's `apply_chat_template_with_tools_oaicompat`
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -14,11 +15,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::AppHandle;
-
-// Note: `app` is optional so the loop can be exercised from
-// non-Tauri contexts (examples, integration tests). Tools that
-// genuinely need it should treat `None` as a runtime error.
 
 /// A single tool the model can invoke. Implementations describe their
 /// schema and dispatch synchronously w.r.t. the model turn (they may
@@ -58,9 +54,13 @@ pub trait Tool: Send + Sync {
 /// `ctx.cancel` for long-running operations and abort promptly.
 pub struct ToolContext {
     pub cancel: Arc<AtomicBool>,
-    pub app: Option<AppHandle>,
     /// Optional working directory the agent run is rooted in.
     pub workdir: Option<PathBuf>,
+    /// Opaque shell-provided state. Tools that depend on
+    /// shell-specific handles (e.g. Tauri's `AppHandle`) downcast
+    /// this. Core keeps no opinion on what's inside. Retired in P5
+    /// once search/embed move to core behind explicit traits.
+    pub state: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 /// Reasons a tool dispatch can fail. The agent loop maps each variant

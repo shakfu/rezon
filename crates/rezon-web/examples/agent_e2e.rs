@@ -65,6 +65,7 @@ async fn run(prompt: String) -> Result<()> {
         },
         max_steps: 6,
         gate: Arc::new(AutoApproveGate),
+        tool_state: None,
     };
 
     let outcome = run_agent(provider, registry, sink, &mut messages, opts).await?;

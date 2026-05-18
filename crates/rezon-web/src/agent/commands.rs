@@ -16,7 +16,7 @@ use crate::agent::{
     run_agent, tauri_gate::TauriConfirmationGate, tauri_sink::TauriEventSink,
     tools::default_registry, AgentOpts, ChatMessage, Provider, ProviderOpts,
 };
-use crate::llm;
+use rezon_core::llm;
 
 /// Tracks the cancel flag for the in-flight agent run, if any, plus
 /// the table of pending tool-confirmation oneshots. One active run at
@@ -175,6 +175,7 @@ pub async fn agent_chat(
         },
         max_steps: opts.max_steps.unwrap_or(8),
         gate,
+        tool_state: Some(Arc::new(app.clone())),
     };
 
     let mut messages = messages;

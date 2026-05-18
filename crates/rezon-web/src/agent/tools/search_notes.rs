@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 
 use crate::agent::tool::{Tool, ToolContext, ToolError};
 use crate::embed::semantic_query;
@@ -74,8 +74,10 @@ impl Tool for SearchNotes {
         let limit = args.limit.unwrap_or(8).clamp(1, 50) as usize;
 
         let app = ctx
-            .app
-            .clone()
+            .state
+            .as_ref()
+            .and_then(|s| s.downcast_ref::<AppHandle>())
+            .cloned()
             .ok_or_else(|| ToolError::Argument("no app handle available".into()))?;
 
         let vault = app

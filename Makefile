@@ -1,4 +1,5 @@
-CARGO_MANIFEST := src-tauri/Cargo.toml
+CARGO_MANIFEST := Cargo.toml
+TAURI_CONF := crates/rezon-web/tauri.conf.json
 
 .PHONY: help install dev build web-dev web-build check fmt fmt-check lint test clean
 
@@ -9,10 +10,10 @@ install: ## Install JS deps
 	bun install
 
 dev: ## Run Tauri app in dev mode
-	bun run tauri dev
+	bun run tauri dev --config $(TAURI_CONF)
 
 build: ## Build Tauri app for release
-	bun run tauri build
+	bun run tauri build --config $(TAURI_CONF)
 
 web-dev: ## Run Vite dev server only (no Tauri)
 	bun run dev
@@ -20,20 +21,20 @@ web-dev: ## Run Vite dev server only (no Tauri)
 web-build: ## Build frontend only
 	bun run build
 
-check: ## cargo check
-	cargo check --manifest-path $(CARGO_MANIFEST)
+check: ## cargo check (workspace)
+	cargo check --workspace
 
-fmt: ## Format Rust code
-	cargo fmt --manifest-path $(CARGO_MANIFEST)
+fmt: ## Format Rust code (workspace)
+	cargo fmt --all
 
-fmt-check: ## Verify Rust formatting
-	cargo fmt --manifest-path $(CARGO_MANIFEST) -- --check
+fmt-check: ## Verify Rust formatting (workspace)
+	cargo fmt --all -- --check
 
-lint: ## Clippy with warnings as errors
-	cargo clippy --manifest-path $(CARGO_MANIFEST) --all-targets -- -D warnings
+lint: ## Clippy with warnings as errors (workspace)
+	cargo clippy --workspace --all-targets -- -D warnings
 
-test: ## Run Rust tests
-	cargo test --manifest-path $(CARGO_MANIFEST)
+test: ## Run Rust tests (workspace)
+	cargo test --workspace
 
 clean: ## Remove build artifacts
-	rm -rf node_modules dist src-tauri/target
+	rm -rf node_modules dist target crates/rezon-web/target

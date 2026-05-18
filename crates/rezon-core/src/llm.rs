@@ -1,5 +1,5 @@
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex as StdMutex};
 use std::time::Instant;
@@ -26,7 +26,6 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::agent::delta::{AgentDelta, FinishReason, StreamStats};
@@ -34,6 +33,26 @@ use crate::agent::delta::{AgentDelta, FinishReason, StreamStats};
 const N_CTX: u32 = 4096;
 const MAX_NEW_TOKENS: i32 = 1024;
 const N_GPU_LAYERS: u32 = 999;
+
+/// Lifecycle events for a single chat turn. The shell wires these to
+/// whatever transport it uses (Tauri events for rezon-web, an mpsc
+/// channel the UI thread drains for rezon-tui). Replaces the previous
+/// hard-coded `app.emit("chat-token", ...)` calls.
+pub trait ChatSink: Send + Sync {
+    fn on_token(&self, delta: &str);
+    fn on_stats(&self, stats: &ChatStats);
+    fn on_done(&self, full: &str);
+}
+
+/// Sink that drops every event. Useful for tests and non-streaming
+/// callers.
+pub struct NullChatSink;
+
+impl ChatSink for NullChatSink {
+    fn on_token(&self, _: &str) {}
+    fn on_stats(&self, _: &ChatStats) {}
+    fn on_done(&self, _: &str) {}
+}
 
 #[derive(Default)]
 pub struct LlmState {
@@ -53,11 +72,39 @@ impl LlmState {
         Ok(b)
     }
 
+    /// Snapshot of the currently-loaded model.
+    pub fn status(&self) -> ModelStatus {
+        let guard = self.loaded.lock().unwrap();
+        match guard.as_ref() {
+            Some(l) => ModelStatus {
+                loaded: true,
+                path: Some(l.path.clone()),
+            },
+            None => ModelStatus {
+                loaded: false,
+                path: None,
+            },
+        }
+    }
+
+    /// Signal any in-flight chat to abort. The next request resets
+    /// the flag to false before dispatching.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Reset the cancel flag and hand out a clone the caller can use
+    /// to observe future cancellations.
+    pub fn arm_cancel(&self) -> Arc<AtomicBool> {
+        self.cancel.store(false, Ordering::Relaxed);
+        self.cancel.clone()
+    }
+
     /// Submit a tool-aware streaming chat to the loaded local model's
     /// worker. Returns a receiver that yields `AgentDelta` values; the
     /// channel closes when generation finishes. Used by
     /// `agent::local::LocalProvider`.
-    pub(crate) fn agent_chat_stream(
+    pub fn agent_chat_stream(
         &self,
         messages_json: String,
         tools_json: String,
@@ -85,19 +132,78 @@ impl LlmState {
         Ok(rx)
     }
 
+    /// Submit a non-tool chat to the loaded local model. Tokens stream
+    /// to `sink` as they are produced.
+    pub async fn local_chat(
+        &self,
+        messages: Vec<ChatMsg>,
+        cancel: Arc<AtomicBool>,
+        sink: Arc<dyn ChatSink>,
+    ) -> Result<String, String> {
+        let sender = {
+            let guard = self.loaded.lock().unwrap();
+            guard
+                .as_ref()
+                .ok_or_else(|| "no model loaded".to_string())?
+                .sender
+                .as_ref()
+                .ok_or_else(|| "model worker exited".to_string())?
+                .clone()
+        };
+
+        let (respond_tx, respond_rx) = tokio::sync::oneshot::channel();
+        sender
+            .send(WorkerRequest::Chat {
+                messages,
+                cancel,
+                sink,
+                respond: respond_tx,
+            })
+            .map_err(|_| "model worker exited".to_string())?;
+
+        respond_rx
+            .await
+            .map_err(|_| "model worker dropped response".to_string())?
+    }
+
+    /// Load a GGUF model. Replaces any previously-loaded model.
+    pub async fn load(&self, path: String) -> std::result::Result<ModelStatus, String> {
+        let backend = self.ensure_backend().map_err(|e| e.to_string())?;
+        let path_for_load = path.clone();
+        let backend_for_load = backend.clone();
+        let model = tokio::task::spawn_blocking(move || -> std::result::Result<LlamaModel, String> {
+            let params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
+            LlamaModel::load_from_file(&backend_for_load, Path::new(&path_for_load), &params)
+                .map_err(|e| format!("load_from_file: {e}"))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+        let model = Arc::new(model);
+        let (sender, join) = spawn_worker(model, backend);
+        self.cancel.store(true, Ordering::Relaxed);
+        {
+            let mut guard = self.loaded.lock().unwrap();
+            *guard = Some(LoadedHandle {
+                path: path.clone(),
+                sender: Some(sender),
+                join: Some(join),
+            });
+        }
+        Ok(ModelStatus {
+            loaded: true,
+            path: Some(path),
+        })
+    }
+
     pub fn shutdown(&self) {
-        // Order matters here: ggml-metal's process-exit destructor (run via
-        // __cxa_finalize after main returns) asserts that no resource sets
-        // are alive on the metal device. If the worker thread is still
-        // holding a LlamaContext at that point, its KV-cache buffers are
-        // registered against the device and the assert fires. So we must
-        // (a) signal any in-flight chat to abort, (b) drop the loaded
-        // handle and *join* the worker thread before returning, and only
-        // then (c) drop the backend Arc.
+        // Order matters: ggml-metal's process-exit destructor (run via
+        // __cxa_finalize after main returns) asserts that no resource
+        // sets are alive on the metal device. So drop the worker (which
+        // joins the thread and releases the LlamaContext) before
+        // dropping the backend Arc.
         self.cancel.store(true, Ordering::Relaxed);
         if let Ok(mut g) = self.loaded.lock() {
-            // Dropping the LoadedHandle closes the channel and joins the
-            // worker thread (see Drop impl).
             *g = None;
         }
         if let Ok(mut g) = self.backend.lock() {
@@ -106,10 +212,6 @@ impl LlmState {
     }
 }
 
-// A handle to the per-model worker thread. Dropping closes the channel
-// (waking the worker if it's idle on rx.recv) and then joins the thread,
-// guaranteeing the LlamaContext + LlamaModel + the worker's Arc clone of
-// LlamaBackend are all released before this drop returns.
 struct LoadedHandle {
     path: String,
     sender: Option<mpsc::Sender<WorkerRequest>>,
@@ -118,16 +220,7 @@ struct LoadedHandle {
 
 impl Drop for LoadedHandle {
     fn drop(&mut self) {
-        // Step 1: drop the sender to close the channel. If the worker is
-        // idle (blocked on rx.recv) it returns Err and the loop exits. If
-        // the worker is mid-chat it will see the cancel flag (set by
-        // LlmState::shutdown or by chat() before each new request) and
-        // bail out of the generation loop, then loop back to rx.recv,
-        // which now also returns Err.
         self.sender.take();
-        // Step 2: wait for the worker thread to actually finish, so its
-        // LlamaContext (and the metal buffers behind its KV cache) are
-        // gone before this function returns.
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
@@ -138,12 +231,9 @@ enum WorkerRequest {
     Chat {
         messages: Vec<ChatMsg>,
         cancel: Arc<AtomicBool>,
-        app: AppHandle,
-        respond: tokio::sync::oneshot::Sender<Result<String, String>>,
+        sink: Arc<dyn ChatSink>,
+        respond: tokio::sync::oneshot::Sender<std::result::Result<String, String>>,
     },
-    /// Tool-aware streaming chat. Driven by the agent loop. Emits
-    /// `AgentDelta` values through `deltas`; closes the channel when
-    /// generation completes (normally, due to cancel, or on error).
     AgentChat {
         messages_json: String,
         tools_json: String,
@@ -174,28 +264,21 @@ pub struct ChatStats {
     pub duration_ms: u64,
 }
 
-fn config_file(app: &AppHandle) -> Result<PathBuf> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| anyhow!("app_config_dir: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("mkdir {dir:?}: {e}"))?;
-    Ok(dir.join("last_model.txt"))
-}
-
-fn persist_last_model(app: &AppHandle, path: &str) {
-    match config_file(app) {
-        Ok(p) => {
-            if let Err(e) = std::fs::write(&p, path) {
-                eprintln!("persist last_model to {p:?}: {e}");
-            }
-        }
-        Err(e) => eprintln!("persist last_model: {e}"),
+/// Persist the path of the most-recently-loaded model under
+/// `<config_dir>/last_model.txt`. Errors are logged, not returned.
+pub fn persist_last_model(config_dir: &Path, path: &str) {
+    if let Err(e) = std::fs::create_dir_all(config_dir) {
+        eprintln!("persist last_model: mkdir {config_dir:?}: {e}");
+        return;
+    }
+    let p = config_dir.join("last_model.txt");
+    if let Err(e) = std::fs::write(&p, path) {
+        eprintln!("persist last_model to {p:?}: {e}");
     }
 }
 
-pub fn read_last_model(app: &AppHandle) -> Option<String> {
-    let p = config_file(app).ok()?;
+pub fn read_last_model(config_dir: &Path) -> Option<String> {
+    let p = config_dir.join("last_model.txt");
     let s = std::fs::read_to_string(p).ok()?;
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -205,74 +288,7 @@ pub fn read_last_model(app: &AppHandle) -> Option<String> {
     }
 }
 
-pub async fn do_load(app: &AppHandle, path: String) -> Result<ModelStatus, String> {
-    let _ = app.emit("model-loading", &path);
-    let state = app.state::<LlmState>();
-    let backend = state.ensure_backend().map_err(|e| e.to_string())?;
-    let path_for_load = path.clone();
-    let backend_for_load = backend.clone();
-    let model = tokio::task::spawn_blocking(move || -> Result<LlamaModel, String> {
-        let params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
-        LlamaModel::load_from_file(&backend_for_load, Path::new(&path_for_load), &params)
-            .map_err(|e| format!("load_from_file: {e}"))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    let model = Arc::new(model);
-    let (sender, join) = spawn_worker(model, backend);
-    // Tell the previous worker (if any) to abort an in-flight chat so we
-    // don't block here for up to MAX_NEW_TOKENS while it finishes. The
-    // next chat() resets the flag to false before dispatching.
-    state.cancel.store(true, Ordering::Relaxed);
-    {
-        let mut guard = state.loaded.lock().unwrap();
-        // Replacing drops the previous LoadedHandle, whose Drop impl closes
-        // the channel and joins the previous worker thread before this
-        // assignment returns. So the previous model + context are fully
-        // released before the new worker takes over.
-        *guard = Some(LoadedHandle {
-            path: path.clone(),
-            sender: Some(sender),
-            join: Some(join),
-        });
-    }
-    persist_last_model(app, &path);
-    let status = ModelStatus {
-        loaded: true,
-        path: Some(path),
-    };
-    let _ = app.emit("model-loaded", &status);
-    Ok(status)
-}
-
-#[tauri::command]
-pub async fn load_model(app: AppHandle, path: String) -> Result<ModelStatus, String> {
-    match do_load(&app, path).await {
-        Ok(s) => Ok(s),
-        Err(e) => {
-            let _ = app.emit("model-load-error", &e);
-            Err(e)
-        }
-    }
-}
-
-#[tauri::command]
-pub fn model_status(state: State<'_, LlmState>) -> Result<ModelStatus, String> {
-    let guard = state.loaded.lock().unwrap();
-    Ok(match guard.as_ref() {
-        Some(l) => ModelStatus {
-            loaded: true,
-            path: Some(l.path.clone()),
-        },
-        None => ModelStatus {
-            loaded: false,
-            path: None,
-        },
-    })
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatOpts {
     pub provider: String,
@@ -284,23 +300,16 @@ pub struct ChatOpts {
     pub api_key: Option<String>,
 }
 
-// Cloud provider catalog. Loaded from src-tauri/models.json at build
-// time via include_str!, parsed once on first access. To add or change
-// models, edit models.json — no code changes required.
-//
-// Field names mirror the JS-facing camelCase shape (see
-// `CloudProviderInfo` below) so the same struct can deserialize the
-// JSON and back the public command response.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CloudProviderDef {
-    pub(crate) key: String,
-    pub(crate) label: String,
-    pub(crate) env_var: String,
-    pub(crate) base_url: String,
-    pub(crate) default_model: String,
-    pub(crate) recommended_models: Vec<String>,
-    pub(crate) user_configurable: bool,
+pub struct CloudProviderDef {
+    pub key: String,
+    pub label: String,
+    pub env_var: String,
+    pub base_url: String,
+    pub default_model: String,
+    pub recommended_models: Vec<String>,
+    pub user_configurable: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,7 +319,7 @@ struct ModelsConfig {
 
 const MODELS_JSON: &str = include_str!("../models.json");
 
-fn cloud_providers_catalog() -> &'static [CloudProviderDef] {
+pub fn cloud_providers_catalog() -> &'static [CloudProviderDef] {
     static CACHE: std::sync::OnceLock<Vec<CloudProviderDef>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         let cfg: ModelsConfig =
@@ -319,63 +328,12 @@ fn cloud_providers_catalog() -> &'static [CloudProviderDef] {
     })
 }
 
-pub(crate) fn cloud_provider_def(key: &str) -> Option<&'static CloudProviderDef> {
+pub fn cloud_provider_def(key: &str) -> Option<&'static CloudProviderDef> {
     cloud_providers_catalog().iter().find(|p| p.key == key)
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CloudProviderInfo {
-    key: String,
-    label: String,
-    env_var: String,
-    default_model: String,
-    recommended_models: Vec<String>,
-    api_key_set: bool,
-    user_configurable: bool,
-}
-
-#[tauri::command]
-pub fn cloud_providers() -> Vec<CloudProviderInfo> {
-    cloud_providers_catalog()
-        .iter()
-        .map(|p| CloudProviderInfo {
-            key: p.key.clone(),
-            label: p.label.clone(),
-            env_var: p.env_var.clone(),
-            default_model: p.default_model.clone(),
-            recommended_models: p.recommended_models.clone(),
-            // Treat user-configurable providers as always available; the
-            // user supplies the key (if any) at request time.
-            api_key_set: p.user_configurable
-                || std::env::var(&p.env_var)
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false),
-            user_configurable: p.user_configurable,
-        })
-        .collect()
-}
-
-#[tauri::command]
-pub fn cancel_chat(state: State<'_, LlmState>) {
-    state.cancel.store(true, Ordering::Relaxed);
-}
-
-#[tauri::command]
-pub async fn chat(
-    app: AppHandle,
-    messages: Vec<ChatMsg>,
-    opts: ChatOpts,
-) -> Result<String, String> {
-    let cancel = {
-        let state = app.state::<LlmState>();
-        state.cancel.store(false, Ordering::Relaxed);
-        state.cancel.clone()
-    };
-
-    if opts.provider == "local" {
-        return run_local_chat(&app, messages, cancel).await;
-    }
+/// Resolve api_key + base_url + model for a non-`local` provider.
+pub fn resolve_cloud_config(opts: &ChatOpts) -> std::result::Result<(String, String, String), String> {
     let def = cloud_provider_def(&opts.provider)
         .ok_or_else(|| format!("unknown provider: {}", opts.provider))?;
 
@@ -387,11 +345,9 @@ pub async fn chat(
             .filter(|s| !s.is_empty())
             .ok_or_else(|| "base URL is required".to_string())?
             .to_string();
-        // API key is optional for local OpenAI-compatible servers (Ollama,
-        // llama.cpp server). async-openai sends an Authorization header
-        // either way; servers that don't check it ignore the value.
         let api_key = opts
             .api_key
+            .clone()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "no-key".to_string());
@@ -406,6 +362,7 @@ pub async fn chat(
 
     let model = opts
         .model
+        .clone()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| {
             if def.default_model.is_empty() {
@@ -416,56 +373,41 @@ pub async fn chat(
         })
         .ok_or_else(|| "model is required".to_string())?;
 
+    Ok((api_key, base_url, model))
+}
+
+/// Provider-routing chat entrypoint. Picks local or cloud based on
+/// `opts.provider`. Streaming events flow through `sink`.
+pub async fn chat(
+    state: &LlmState,
+    messages: Vec<ChatMsg>,
+    opts: ChatOpts,
+    sink: Arc<dyn ChatSink>,
+) -> std::result::Result<String, String> {
+    let cancel = state.arm_cancel();
+
+    if opts.provider == "local" {
+        return state.local_chat(messages, cancel, sink).await;
+    }
+    let (api_key, base_url, model) = resolve_cloud_config(&opts)?;
     run_cloud_chat(
-        &app,
         messages,
         model,
         api_key,
         base_url,
         opts.provider.clone(),
         cancel,
+        sink,
     )
     .await
 }
 
-async fn run_local_chat(
-    app: &AppHandle,
-    messages: Vec<ChatMsg>,
-    cancel: Arc<AtomicBool>,
-) -> Result<String, String> {
-    let sender = {
-        let state = app.state::<LlmState>();
-        let guard = state.loaded.lock().unwrap();
-        guard
-            .as_ref()
-            .ok_or_else(|| "no model loaded".to_string())?
-            .sender
-            .as_ref()
-            .ok_or_else(|| "model worker exited".to_string())?
-            .clone()
-    };
-
-    let (respond_tx, respond_rx) = tokio::sync::oneshot::channel();
-    sender
-        .send(WorkerRequest::Chat {
-            messages,
-            cancel,
-            app: app.clone(),
-            respond: respond_tx,
-        })
-        .map_err(|_| "model worker exited".to_string())?;
-
-    respond_rx
-        .await
-        .map_err(|_| "model worker dropped response".to_string())?
-}
-
 fn to_openai_messages(
     messages: Vec<ChatMsg>,
-) -> Result<Vec<ChatCompletionRequestMessage>, String> {
+) -> std::result::Result<Vec<ChatCompletionRequestMessage>, String> {
     messages
         .into_iter()
-        .map(|m| -> Result<ChatCompletionRequestMessage, String> {
+        .map(|m| -> std::result::Result<ChatCompletionRequestMessage, String> {
             match m.role.as_str() {
                 "system" => Ok(ChatCompletionRequestSystemMessageArgs::default()
                     .content(m.content)
@@ -489,14 +431,14 @@ fn to_openai_messages(
 }
 
 async fn run_cloud_chat(
-    app: &AppHandle,
     messages: Vec<ChatMsg>,
     model: String,
     api_key: String,
     base_url: String,
     provider: String,
     cancel: Arc<AtomicBool>,
-) -> Result<String, String> {
+    sink: Arc<dyn ChatSink>,
+) -> std::result::Result<String, String> {
     let started = Instant::now();
     let openai_msgs = to_openai_messages(messages)?;
     let request = CreateChatCompletionRequestArgs::default()
@@ -537,7 +479,7 @@ async fn run_cloud_chat(
                     if let Some(content) = choice.delta.content {
                         if !content.is_empty() {
                             full.push_str(&content);
-                            let _ = app.emit("chat-token", &content);
+                            sink.on_token(&content);
                         }
                     }
                 }
@@ -550,14 +492,11 @@ async fn run_cloud_chat(
         provider,
         prompt_tokens,
         cached_tokens: None,
-        // Fall back to a rough char-based estimate if the server didn't
-        // return usage (e.g. some OpenAI-compatible servers ignore
-        // `stream_options.include_usage`).
         gen_tokens: gen_tokens.unwrap_or_else(|| (full.len() as u32).div_ceil(4)),
         duration_ms: started.elapsed().as_millis() as u64,
     };
-    let _ = app.emit("chat-stats", &stats);
-    let _ = app.emit("chat-done", &full);
+    sink.on_stats(&stats);
+    sink.on_done(&full);
     Ok(full)
 }
 
@@ -575,9 +514,6 @@ fn worker_loop(
     backend: Arc<LlamaBackend>,
     rx: mpsc::Receiver<WorkerRequest>,
 ) {
-    // Borrow the model for the lifetime of this stack frame; the LlamaContext
-    // borrows from it. Both `ctx` and the borrow drop before `model` does
-    // because of reverse-declaration drop order.
     let model_ref: &LlamaModel = &model;
     let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(N_CTX));
     let mut ctx = match model_ref.new_context(&backend, ctx_params) {
@@ -585,18 +521,15 @@ fn worker_loop(
         Err(e) => {
             let err = format!("new_context: {e}");
             eprintln!("{err}");
-            // Reply to any pending requests with the init error rather than
-            // hanging.
-            while let Ok(WorkerRequest::Chat { respond, .. }) = rx.recv() {
-                let _ = respond.send(Err(err.clone()));
+            while let Ok(req) = rx.recv() {
+                if let WorkerRequest::Chat { respond, .. } = req {
+                    let _ = respond.send(Err(err.clone()));
+                }
             }
             return;
         }
     };
 
-    // Tokens currently committed to the KV cache for sequence 0. Used to
-    // find the longest common prefix with each new prompt so we only have
-    // to re-decode the divergent suffix.
     let mut cached: Vec<LlamaToken> = Vec::new();
 
     while let Ok(req) = rx.recv() {
@@ -604,11 +537,17 @@ fn worker_loop(
             WorkerRequest::Chat {
                 messages,
                 cancel,
-                app,
+                sink,
                 respond,
             } => {
-                let result =
-                    run_chat_with_cache(&app, model_ref, &mut ctx, &mut cached, messages, cancel);
+                let result = run_chat_with_cache(
+                    sink.as_ref(),
+                    model_ref,
+                    &mut ctx,
+                    &mut cached,
+                    messages,
+                    cancel,
+                );
                 let _ = respond.send(result);
             }
             WorkerRequest::AgentChat {
@@ -617,8 +556,6 @@ fn worker_loop(
                 cancel,
                 deltas,
             } => {
-                // `deltas` is dropped at the end of this scope, closing
-                // the channel and signaling completion to the consumer.
                 let _ = run_agent_with_cache(
                     model_ref,
                     &mut ctx,
@@ -634,13 +571,13 @@ fn worker_loop(
 }
 
 fn run_chat_with_cache(
-    app: &AppHandle,
+    sink: &dyn ChatSink,
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
     cached: &mut Vec<LlamaToken>,
     messages: Vec<ChatMsg>,
     cancel: Arc<AtomicBool>,
-) -> Result<String, String> {
+) -> std::result::Result<String, String> {
     let started = Instant::now();
     let chat_msgs: Vec<LlamaChatMessage> = messages
         .into_iter()
@@ -648,7 +585,7 @@ fn run_chat_with_cache(
             LlamaChatMessage::new(m.role, m.content)
                 .map_err(|e| format!("invalid chat message: {e}"))
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<std::result::Result<_, _>>()?;
 
     let template = model
         .chat_template(None)
@@ -661,8 +598,6 @@ fn run_chat_with_cache(
         .str_to_token(&prompt, AddBos::Always)
         .map_err(|e| format!("str_to_token: {e}"))?;
 
-    // Longest common prefix between the cached tokens (in the KV cache) and
-    // the freshly tokenized prompt.
     let mut common = 0usize;
     while common < cached.len()
         && common < new_tokens.len()
@@ -671,8 +606,6 @@ fn run_chat_with_cache(
         common += 1;
     }
 
-    // Drop everything beyond the common prefix from the KV cache and from
-    // our shadow vector.
     if common < cached.len() {
         ctx.clear_kv_cache_seq(Some(0), Some(common as u32), None)
             .map_err(|e| format!("clear_kv_cache_seq: {e}"))?;
@@ -687,14 +620,9 @@ fn run_chat_with_cache(
         return Err("prompt fills the context window".to_string());
     }
     if to_add.is_empty() {
-        // Nothing to feed: the new prompt is already entirely in the KV
-        // cache. This shouldn't happen because chat templates append an
-        // assistant-prefix marker each turn, but guard so we don't sample
-        // off a stale logits row.
         return Err("no new tokens to decode".to_string());
     }
 
-    // Decode the divergent suffix of the prompt into the KV cache.
     let mut batch = LlamaBatch::new(to_add.len().max(512), 1);
     let last_idx = to_add.len() - 1;
     for (i, t) in to_add.iter().enumerate() {
@@ -725,10 +653,6 @@ fn run_chat_with_cache(
         sampler.accept(token);
 
         if model.is_eog_token(token) {
-            // Don't push the EOG token to `cached` — we already truncated
-            // back to `common` and only added prompt tokens. The KV cache
-            // currently reflects the prompt only, which is what we want
-            // for the next turn's prefix match.
             break;
         }
 
@@ -740,7 +664,7 @@ fn run_chat_with_cache(
 
         if !piece.is_empty() {
             full.push_str(&piece);
-            let _ = app.emit("chat-token", &piece);
+            sink.on_token(&piece);
         }
 
         batch.clear();
@@ -751,9 +675,6 @@ fn run_chat_with_cache(
         produced += 1;
         ctx.decode(&mut batch)
             .map_err(|e| format!("decode gen: {e}"))?;
-        // Track the generated token in the KV cache shadow, so the next
-        // turn's prompt (which will include this assistant response) finds
-        // a longer matching prefix.
         cached.push(token);
     }
 
@@ -764,20 +685,12 @@ fn run_chat_with_cache(
         gen_tokens: produced as u32,
         duration_ms: started.elapsed().as_millis() as u64,
     };
-    let _ = app.emit("chat-stats", &stats);
-    let _ = app.emit("chat-done", &full);
+    sink.on_stats(&stats);
+    sink.on_done(&full);
     Ok(full)
 }
 
 /// Tool-aware streaming chat against the loaded local model.
-///
-/// Mirrors `run_chat_with_cache` (KV-cache reuse, cancel polling,
-/// stats accounting), but routes through llama-cpp-2's OpenAI-compat
-/// surface so the model emits content + tool calls in OpenAI shape and
-/// `ChatParseStateOaicompat` produces deltas the agent loop can
-/// consume directly. Grammar-constrained sampling is intentionally
-/// disabled — see `docs/dev/local_tool_calling.md` for the upstream
-/// `GGML_ASSERT` bug that motivates skipping it on this version.
 fn run_agent_with_cache(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
@@ -798,18 +711,13 @@ fn run_agent_with_cache(
         tools_json: Some(tools_json),
         tool_choice: None,
         json_schema: None,
-        // Skip grammar synthesis — see docs/dev/local_tool_calling.md.
         grammar: None,
         reasoning_format: None,
         chat_template_kwargs: None,
         add_generation_prompt: true,
         use_jinja: true,
         parallel_tool_calls: true,
-        // Phase-4 simplification: disable thinking blocks. Re-enable
-        // once the UI has a "Show reasoning" affordance.
         enable_thinking: false,
-        // Match the existing chat path: tokenizer adds BOS, not the
-        // template.
         add_bos: false,
         add_eos: false,
         parse_tool_calls: true,
@@ -914,7 +822,6 @@ fn run_agent_with_cache(
             for json in parsed {
                 for d in oai_delta_to_agent_deltas(&json, &mut emitted_tool_calls) {
                     if deltas.send(Ok(d)).is_err() {
-                        // Receiver dropped (loop abandoned). Just bail.
                         return Ok(());
                     }
                 }
@@ -932,9 +839,6 @@ fn run_agent_with_cache(
         cached.push(token);
     }
 
-    // Final flush; tolerate parser errors here since malformed mid-
-    // tool-call output (e.g. due to cancellation) is the most likely
-    // cause and we have no better recovery.
     if let Ok(final_parsed) = parse_state.update("", false) {
         for json in final_parsed {
             for d in oai_delta_to_agent_deltas(&json, &mut emitted_tool_calls) {
@@ -965,10 +869,6 @@ fn run_agent_with_cache(
     Ok(())
 }
 
-/// Convert one OpenAI-shaped JSON delta string (as emitted by
-/// `ChatParseStateOaicompat::update`) into zero or more `AgentDelta`s.
-/// A single chunk can carry both a new tool-call header and an
-/// argument fragment, so the function may produce multiple deltas.
 fn oai_delta_to_agent_deltas(json: &str, emitted_tool_calls: &mut bool) -> Vec<AgentDelta> {
     let v: Value = match serde_json::from_str(json) {
         Ok(v) => v,
