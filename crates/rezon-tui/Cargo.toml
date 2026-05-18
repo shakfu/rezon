@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 directories = "5"
 nucleo-matcher = "0.3"
+rusqlite = { version = "0.32", features = ["bundled"] }
 rezon-core = { path = "../rezon-core" }
 rustyline = "14"
 serde = { version = "1", features = ["derive"] }

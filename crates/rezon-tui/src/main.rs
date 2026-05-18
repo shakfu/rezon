@@ -6,6 +6,7 @@
 // configuration; `/help` lists them.
 
 mod agent;
+mod conv_index;
 mod input;
 mod markdown;
 mod picker;
@@ -118,6 +119,25 @@ async fn run(cli: Cli) -> Result<()> {
     let default_system = cli.system.clone().unwrap_or_default();
     let (store, _existed) = store::Store::load_or_new(&default_system)?;
 
+    // Open + rebuild the FTS index from the loaded store. Failure is
+    // non-fatal: `/search` will degrade to "no matches" but the rest
+    // of the REPL keeps working.
+    let conv_index = match store.path.parent().map(|p| p.join("conversations.db")) {
+        Some(path) => match conv_index::ConvIndex::open(&path) {
+            Ok(idx) => {
+                if let Err(e) = idx.rebuild_from(&store) {
+                    eprintln!("conv index rebuild: {e}");
+                }
+                Some(idx)
+            }
+            Err(e) => {
+                eprintln!("conv index open: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
     let vault = vault::VaultCtx::new()?;
     let mut repl = Repl::new(
         state,
@@ -128,6 +148,7 @@ async fn run(cli: Cli) -> Result<()> {
         cli.max_steps,
         vault,
         cli.show_thinking,
+        conv_index,
     );
     repl.run().await
 }

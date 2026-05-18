@@ -29,10 +29,12 @@ where
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     let label = label.into();
+    let started = std::time::Instant::now();
     let spinner = tokio::spawn(async move {
         let mut i = 0usize;
         while !stop_clone.load(Ordering::Relaxed) {
             let frame = FRAMES[i % FRAMES.len()];
+            let secs = started.elapsed().as_secs();
             // Scope the stdout lock so it doesn't span the await
             // below (the anstream guard is !Send, which would
             // disqualify this task from `tokio::spawn`).
@@ -40,8 +42,12 @@ where
                 let mut out = anstream::stdout().lock();
                 // \r returns to column 0; \x1b[2K clears the whole
                 // line. \x1b[?25l hides the cursor; we restore it on
-                // stop.
-                let _ = write!(out, "\r\x1b[2K\x1b[?25l\x1b[35m{frame}\x1b[0m {label}");
+                // stop. Trailing `(Ns)` reassures the user that
+                // work is still in progress on slow loads.
+                let _ = write!(
+                    out,
+                    "\r\x1b[2K\x1b[?25l\x1b[35m{frame}\x1b[0m {label} \x1b[2m({secs}s)\x1b[0m"
+                );
                 let _ = out.flush();
             }
             tokio::time::sleep(Duration::from_millis(80)).await;

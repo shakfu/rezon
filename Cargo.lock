@@ -3806,6 +3806,7 @@ dependencies = [
  "directories",
  "nucleo-matcher",
  "rezon-core",
+ "rusqlite",
  "rustyline",
  "serde",
  "serde_json",

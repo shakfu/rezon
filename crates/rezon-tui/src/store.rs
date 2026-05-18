@@ -48,6 +48,36 @@ pub struct Conversation {
     pub messages: Vec<ChatMsg>,
     #[serde(default)]
     pub settings: ConversationSettings,
+    /// Epoch-millis of the last turn. Used to disambiguate
+    /// duplicate titles in `/conv` / `/search` and to drive a
+    /// recent-first sort. `None` on conversations created before
+    /// this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<u64>,
+}
+
+impl Conversation {
+    /// Stamp the conversation with the current wall-clock instant.
+    /// Called whenever a turn is committed.
+    pub fn touch(&mut self) {
+        self.last_used = Some(now_ms());
+    }
+
+    /// Count of "real" (user + assistant) messages, excluding system
+    /// + tool turns. Used by the picker disambiguation hint.
+    pub fn user_turn_count(&self) -> usize {
+        self.messages
+            .iter()
+            .filter(|m| matches!(m.role.as_str(), "user" | "assistant"))
+            .count()
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Conversation {
@@ -66,6 +96,7 @@ impl Conversation {
             system,
             messages,
             settings: ConversationSettings::default(),
+            last_used: None,
         }
     }
 

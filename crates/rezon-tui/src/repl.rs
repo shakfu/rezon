@@ -24,6 +24,7 @@ use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::agent::{spawn_agent_run, AgentRunHandle};
+use crate::conv_index::ConvIndex;
 use crate::input::{self, ReadOutcome, ReplEditor};
 use crate::sink::{StatsLite, TuiChatSink, UiEvent};
 use crate::store::Store;
@@ -73,6 +74,10 @@ pub struct Repl {
     max_steps: usize,
     store: Store,
     vault: VaultCtx,
+    /// FTS5 index over conversation messages. `None` when the
+    /// underlying SQLite file couldn't be opened; in that case
+    /// `/search` reports "no matches" rather than crashing.
+    conv_index: Option<ConvIndex>,
     ui_tx: UnboundedSender<UiEvent>,
     ui_rx: UnboundedReceiver<UiEvent>,
     /// Active agent handle while an agent run is in flight (used for
@@ -91,6 +96,7 @@ impl Repl {
         max_steps: usize,
         vault: VaultCtx,
         show_thinking: bool,
+        conv_index: Option<ConvIndex>,
     ) -> Self {
         let (ui_tx, ui_rx) = unbounded_channel();
         Self {
@@ -102,9 +108,28 @@ impl Repl {
             max_steps,
             store,
             vault,
+            conv_index,
             ui_tx,
             ui_rx,
             agent_handle: None,
+        }
+    }
+
+    /// Re-index the currently active conversation in the FTS index.
+    /// Called after any in-place mutation of the message vector.
+    fn reindex_active(&self) {
+        if let Some(idx) = self.conv_index.as_ref() {
+            if let Err(e) = idx.replace_conv(self.store.active()) {
+                eprintln!("conv index replace: {e}");
+            }
+        }
+    }
+
+    fn deindex_conv(&self, conv_id: &str) {
+        if let Some(idx) = self.conv_index.as_ref() {
+            if let Err(e) = idx.delete_conv(conv_id) {
+                eprintln!("conv index delete: {e}");
+            }
         }
     }
 
@@ -286,6 +311,10 @@ impl Repl {
             self.spawn_chat();
         }
         self.wait_for_turn().await;
+        // Stamp the conversation as just-used so /conv ranks it
+        // first. Re-index so /search picks up the new messages.
+        self.store.active_mut().touch();
+        self.reindex_active();
         self.save_ignore_err();
         Ok(())
     }
@@ -345,6 +374,13 @@ impl Repl {
         let mut stream_start: Option<std::time::Instant> = None;
         let mut last_tick: Option<std::time::Instant> = None;
         let mut gen_chars: usize = 0;
+        // Capture the terminal width at the moment streaming begins
+        // so the markdown re-render uses the same row-count math
+        // that produced the visible output. If the user resizes the
+        // window mid-stream, the already-drawn content keeps its
+        // original wrap layout — re-reading the width at Done time
+        // would over- or under-clear and leak stale rows.
+        let mut stream_width: Option<u16> = None;
         loop {
             tokio::select! {
                 ev = self.ui_rx.recv() => {
@@ -360,6 +396,8 @@ impl Repl {
                             gen_chars += s.chars().count();
                             if stream_start.is_none() {
                                 stream_start = Some(std::time::Instant::now());
+                                stream_width = terminal_size::terminal_size()
+                                    .map(|(w, _)| w.0);
                             }
                             maybe_update_title(&stream_start, &mut last_tick, gen_chars);
                             newline_pending = !s.ends_with('\n');
@@ -398,7 +436,7 @@ impl Repl {
                             // with assistant tokens — we'd clobber
                             // them.
                             if self.agent_handle.is_none() && !assistant.is_empty() {
-                                rerender_markdown(&assistant);
+                                rerender_markdown(&assistant, stream_width);
                             }
                             if let Some(s) = stats {
                                 print_stats(&s);
@@ -610,7 +648,11 @@ impl Repl {
 
     fn cmd_new(&mut self) {
         self.store.new_conversation(&self.default_system);
+        self.store.active_mut().touch();
         self.save_ignore_err();
+        // New conv has no messages yet, but ensure no stale rows
+        // exist for the freshly minted id (defensive).
+        self.reindex_active();
         println!(
             "{meta}new conversation{reset}",
             meta = C_META,
@@ -622,22 +664,38 @@ impl Repl {
         if args == "list" {
             for (i, c) in self.store.conversations.iter().enumerate() {
                 let marker = if i == self.store.active { "*" } else { " " };
-                println!(" {marker} {idx:>2}  {title}", idx = i + 1, title = c.title,);
+                println!(
+                    " {marker} {idx:>2}  {title}  {hint}",
+                    idx = i + 1,
+                    title = c.title,
+                    hint = conv_hint(c),
+                );
             }
             return;
         }
         if args.is_empty() {
-            // Fuzzy picker over conversation titles. Pre-seed with
-            // the current active title so just-pressing-Enter keeps
-            // you on the same conversation.
-            let items: Vec<String> = self
-                .store
-                .conversations
+            // Fuzzy picker over conversation titles with a
+            // disambiguation suffix (msg count + relative time)
+            // so duplicates can still be told apart.
+            //
+            // Items are sorted most-recently-used first; the picker
+            // index maps back to the original conversation index
+            // via the `ranks` array so a /conv pick still selects
+            // the right one.
+            let mut ranks: Vec<usize> = (0..self.store.conversations.len()).collect();
+            ranks.sort_by_key(|&i| {
+                std::cmp::Reverse(self.store.conversations[i].last_used.unwrap_or(0))
+            });
+            let items: Vec<String> = ranks
                 .iter()
-                .map(|c| c.title.clone())
+                .map(|&i| {
+                    let c = &self.store.conversations[i];
+                    let active = if i == self.store.active { "* " } else { "  " };
+                    format!("{active}{title}  {hint}", title = c.title, hint = conv_hint(c))
+                })
                 .collect();
-            if let Some(idx) = crate::picker::pick(items, "conv ", "") {
-                self.store.select(idx);
+            if let Some(picked) = crate::picker::pick(items, "conv ", "") {
+                self.store.select(ranks[picked]);
                 self.save_ignore_err();
                 println!(
                     "{meta}-> {title}{reset}",
@@ -699,7 +757,18 @@ impl Repl {
 
     fn cmd_delete(&mut self) {
         let sys = self.default_system.clone();
+        // Capture the id BEFORE delete so we can purge its FTS rows.
+        // `delete_active` either drops the active conv (slot shifts
+        // up — old id is gone) or, when it's the last one,
+        // replaces it in-place with a fresh blank (new id).
+        let old_id = self.store.active().id.clone();
         self.store.delete_active(&sys);
+        self.deindex_conv(&old_id);
+        // If we replaced in-place, the new active conv has a fresh
+        // id and no messages — reindex to make sure nothing stale
+        // is associated with it. If we shifted, the new active was
+        // already in the index.
+        self.reindex_active();
         self.save_ignore_err();
         println!("{meta}deleted{reset}", meta = C_META, reset = C_RESET);
     }
@@ -976,34 +1045,84 @@ impl Repl {
     }
 
     fn cmd_search(&mut self, args: &str) {
-        // Build candidates: one entry per non-system / non-tool
-        // message, tagged with `(conv_idx, msg_idx)` so a pick can
-        // route us back to the right conversation. The display
-        // string is what the matcher sees — keep it human-readable
-        // (you / rzn marker + first-line snippet + conv title).
+        // Two paths converge into the same picker:
+        //   * non-empty query + FTS index: query the index and map
+        //     `Hit{conv_id, msg_idx}` back to `(conv_idx, msg_idx)`.
+        //     FTS5's `snippet()` highlights the match window with
+        //     `<<` / `>>` markers — shown verbatim in the display.
+        //   * empty query or missing index: linear walk of every
+        //     non-system / non-tool message, picker filters.
         struct Candidate {
             display: String,
             conv_idx: usize,
             msg_idx: usize,
         }
         let mut candidates: Vec<Candidate> = Vec::new();
-        for (ci, conv) in self.store.conversations.iter().enumerate() {
-            for (mi, m) in conv.messages.iter().enumerate() {
-                if matches!(m.role.as_str(), "system" | "tool") {
-                    continue;
+        let query = args.trim();
+        let use_fts = !query.is_empty() && self.conv_index.is_some();
+        if use_fts {
+            // Safety: `use_fts` implies index presence.
+            let idx = self.conv_index.as_ref().unwrap();
+            match idx.search(query, 200) {
+                Ok(hits) => {
+                    for h in hits {
+                        let Some(ci) = self
+                            .store
+                            .conversations
+                            .iter()
+                            .position(|c| c.id == h.conv_id)
+                        else {
+                            continue;
+                        };
+                        let conv = &self.store.conversations[ci];
+                        let role_label: String = match h.role.as_str() {
+                            "user" => "you".into(),
+                            "assistant" => "rzn".into(),
+                            other => other.into(),
+                        };
+                        // The snippet is short by design; collapse
+                        // any embedded newlines so the picker row
+                        // stays on one terminal line.
+                        let snippet: String = h
+                            .snippet
+                            .replace('\n', " ")
+                            .chars()
+                            .take(120)
+                            .collect();
+                        candidates.push(Candidate {
+                            display: format!("{role_label} · {snippet}  ({})", conv.title),
+                            conv_idx: ci,
+                            msg_idx: h.msg_idx,
+                        });
+                    }
                 }
-                let role_label = match m.role.as_str() {
-                    "user" => "you",
-                    "assistant" => "rzn",
-                    other => other,
-                };
-                let first_line = m.content.lines().next().unwrap_or("");
-                let snippet: String = first_line.chars().take(80).collect();
-                candidates.push(Candidate {
-                    display: format!("{role_label} · {snippet}  ({})", conv.title),
-                    conv_idx: ci,
-                    msg_idx: mi,
-                });
+                Err(e) => {
+                    eprintln!("conv index search: {e}");
+                }
+            }
+        }
+        if candidates.is_empty() {
+            // Fall back to linear walk so the user can browse + pick
+            // when no FTS hits (or no index). Pass `args` as the
+            // picker's initial filter.
+            for (ci, conv) in self.store.conversations.iter().enumerate() {
+                for (mi, m) in conv.messages.iter().enumerate() {
+                    if matches!(m.role.as_str(), "system" | "tool") {
+                        continue;
+                    }
+                    let role_label = match m.role.as_str() {
+                        "user" => "you",
+                        "assistant" => "rzn",
+                        other => other,
+                    };
+                    let first_line = m.content.lines().next().unwrap_or("");
+                    let snippet: String = first_line.chars().take(80).collect();
+                    candidates.push(Candidate {
+                        display: format!("{role_label} · {snippet}  ({})", conv.title),
+                        conv_idx: ci,
+                        msg_idx: mi,
+                    });
+                }
             }
         }
         if candidates.is_empty() {
@@ -1015,7 +1134,15 @@ impl Repl {
             return;
         }
         let items: Vec<String> = candidates.iter().map(|c| c.display.clone()).collect();
-        let Some(idx) = crate::picker::pick(items, "search ", args) else {
+        // When FTS already filtered for us we pre-seed the picker
+        // with an empty buffer; otherwise pass `args` through as a
+        // free-text refinement.
+        let initial = if use_fts && !candidates.is_empty() {
+            ""
+        } else {
+            args
+        };
+        let Some(idx) = crate::picker::pick(items, "search ", initial) else {
             return;
         };
         let pick = &candidates[idx];
@@ -1327,9 +1454,11 @@ impl Repl {
         // Re-key with a fresh id so an imported copy can coexist with
         // the original (or with a previous import of the same file).
         conv.id = crate::store::next_id();
+        conv.touch();
         let title = conv.title.clone();
         self.store.conversations.push(conv);
         self.store.active = self.store.conversations.len() - 1;
+        self.reindex_active();
         self.save_ignore_err();
         println!(
             "{meta}imported -> {title}{reset}",
@@ -1341,6 +1470,7 @@ impl Repl {
     fn cmd_fork(&mut self) {
         let mut clone = self.store.active().clone();
         clone.id = crate::store::next_id();
+        clone.touch();
         // Mark the fork distinctly. If the title already ends with
         // `(fork)` we still append, so chained forks read as
         // `foo (fork) (fork)` — easier than counting.
@@ -1348,6 +1478,7 @@ impl Repl {
         let new_title = clone.title.clone();
         self.store.conversations.push(clone);
         self.store.active = self.store.conversations.len() - 1;
+        self.reindex_active();
         self.save_ignore_err();
         println!(
             "{meta}forked -> {new_title}{reset}",
@@ -1513,14 +1644,19 @@ fn help_row(usage: &str, description: &str) {
 /// stdout isn't a tty (piped output keeps the raw markdown — still
 /// human-readable, and avoids spewing cursor-control escapes into
 /// pipes that may not strip them).
-fn rerender_markdown(raw: &str) {
+fn rerender_markdown(raw: &str, stream_width: Option<u16>) {
     use std::io::Write;
     if !std::io::stdout().is_terminal() {
         return;
     }
-    let width = terminal_size::terminal_size()
-        .map(|(terminal_size::Width(w), _)| w)
-        .unwrap_or(80);
+    // Prefer the width captured when streaming started — that's the
+    // width the visible rows were laid out against. Fall back to the
+    // current terminal width when we never recorded one (defensive).
+    let width = stream_width.unwrap_or_else(|| {
+        terminal_size::terminal_size()
+            .map(|(terminal_size::Width(w), _)| w)
+            .unwrap_or(80)
+    });
     let rows = crate::markdown::count_rows(raw, width);
     if rows == 0 {
         return;
@@ -1610,6 +1746,43 @@ fn highlight_match(line: &str, query: &str) -> String {
         }
     }
     out
+}
+
+/// Disambiguation suffix shown next to a conversation title in
+/// `/conv` / `/conv list`. Format: `(N msgs · 2h ago)`. When the
+/// conversation has never been touched (legacy stores) the
+/// timestamp piece is omitted.
+fn conv_hint(c: &crate::store::Conversation) -> String {
+    let count = c.user_turn_count();
+    let plural = if count == 1 { "" } else { "s" };
+    let age = match c.last_used {
+        Some(ms) if ms > 0 => format!(" · {}", relative_time(ms)),
+        _ => String::new(),
+    };
+    format!(
+        "{C_META}({count} msg{plural}{age}){C_META:#}",
+        plural = plural,
+    )
+}
+
+fn relative_time(ts_ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if ts_ms == 0 || now <= ts_ms {
+        return "now".into();
+    }
+    let diff_s = (now - ts_ms) / 1000;
+    if diff_s < 60 {
+        format!("{diff_s}s ago")
+    } else if diff_s < 3600 {
+        format!("{}m ago", diff_s / 60)
+    } else if diff_s < 86_400 {
+        format!("{}h ago", diff_s / 3600)
+    } else {
+        format!("{}d ago", diff_s / 86_400)
+    }
 }
 
 fn basename(p: &str) -> String {
