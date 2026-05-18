@@ -109,6 +109,48 @@ All notable changes to this project. Format loosely follows
     role-preserving conversion, `build_agent_messages` replay
     (carries `tool_calls` on assistant turns + `tool_call_id` on
     tool turns; drops orphan tool turns).
+- **Per-conversation settings** in `rezon-tui`. Each conversation
+  carries optional overrides for `provider`, `model`, `base_url`,
+  `api_key`, `agent_mode`, and `show_thinking`; the REPL composes
+  effective values per call from `Conversation::settings` falling
+  back to CLI defaults. `/model`, `/provider`, `/agent`, `/chat`
+  now write to the active conversation (persisted) instead of the
+  process. Switching conversations via `/conv` / `/next` / `/prev`
+  automatically picks up the new conversation's settings.
+- **`/thinking on|off|toggle`** — surface or hide agent reasoning
+  blocks (`<think>` tokens emitted by Qwen3 and some Anthropic
+  prompt-cache responses). Per-conversation; default off.
+  `--show-thinking` CLI flag sets the launch default. Thinking
+  deltas stream in dim mode and an inline `C_RESET` precedes the
+  next content token so the assistant text isn't tinted.
+- **`/history` markdown rendering** — prior assistant turns route
+  through `markdown::render` so they show with the same bold /
+  italic / heading / list / code-block formatting as live
+  responses. System / tool / user lines unchanged.
+- **`/clear`** intercepted before `handle_command` so it can call
+  `editor.clear_screen()` on the local rustyline editor; the
+  editor's internal layout tracking is reset alongside the visible
+  viewport, so the next prompt aligns cleanly.
+- **`/export <path>` / `/import <path>`** — single-conversation
+  round-trip via pretty-printed JSON. Imports get a fresh id (via
+  `store::next_id`, promoted to `pub(crate)`) so a re-imported file
+  can coexist with the original. Tab completion treats the
+  argument as a filesystem path.
+- **`/fork`** — duplicate the active conversation. Fresh id, title
+  becomes `"<title> (fork)"`, immediately switched to. Persists.
+- **`/models [provider]`** — list a provider's recommended models
+  (from `crates/rezon-core/models.json`). `*` marks the
+  conversation's currently active model; `(default)` marks the
+  catalog default. `local` is a special case that reports the
+  loaded GGUF path. No-arg uses the active conversation's
+  effective provider.
+- **Live tokens-per-second in the terminal title** during
+  generation. The REPL writes `\x1b]0;rezon · ~N.N tok/s\x07`
+  throttled to ~5 Hz; rate is approximated from emitted char
+  count / 4 (same heuristic the chat path uses when the provider
+  omits usage). `Token` and `Thinking` deltas both feed the
+  counter. On `Done` / `Error` the title resets to `rezon`.
+  Suppressed when stdout isn't a tty.
 - **Workspace hygiene** — `cargo fmt --all` clean and `cargo clippy
   --workspace --all-targets -D warnings` clean. Lints fixed along
   the way:

@@ -337,6 +337,14 @@ impl Repl {
         let mut stats: Option<StatsLite> = None;
         let mut interrupts = 0u8;
         let mut newline_pending = false;
+        // Live-tps state: stream_start anchors the rolling rate,
+        // gen_chars approximates token count (rate is computed
+        // against `gen_chars / 4`, the same approximation chats use
+        // when the provider doesn't return usage), last_tick
+        // throttles title-bar writes to ~every 200ms.
+        let mut stream_start: Option<std::time::Instant> = None;
+        let mut last_tick: Option<std::time::Instant> = None;
+        let mut gen_chars: usize = 0;
         loop {
             tokio::select! {
                 ev = self.ui_rx.recv() => {
@@ -349,6 +357,11 @@ impl Repl {
                             print!("{C_RESET}{s}");
                             anstream::stdout().flush().ok();
                             assistant.push_str(&s);
+                            gen_chars += s.chars().count();
+                            if stream_start.is_none() {
+                                stream_start = Some(std::time::Instant::now());
+                            }
+                            maybe_update_title(&stream_start, &mut last_tick, gen_chars);
                             newline_pending = !s.ends_with('\n');
                         }
                         UiEvent::Thinking(s) => {
@@ -365,9 +378,18 @@ impl Repl {
                                 anstream::stdout().flush().ok();
                                 newline_pending = !s.ends_with('\n');
                             }
+                            // Thinking tokens count toward the live
+                            // rate too; the agent is doing real
+                            // work and the user wants to see it.
+                            gen_chars += s.chars().count();
+                            if stream_start.is_none() {
+                                stream_start = Some(std::time::Instant::now());
+                            }
+                            maybe_update_title(&stream_start, &mut last_tick, gen_chars);
                         }
                         UiEvent::Stats(s) => stats = Some(s),
                         UiEvent::Done => {
+                            reset_title();
                             if newline_pending { println!(); }
                             // Chat mode: replace the raw streamed
                             // text with markdown-formatted output.
@@ -385,6 +407,7 @@ impl Repl {
                             break;
                         }
                         UiEvent::Error(e) => {
+                            reset_title();
                             if newline_pending { println!(); newline_pending = false; }
                             eprintln!("{err}error:{reset} {e}", err = C_ERR, reset = C_RESET);
                             println!();
@@ -500,6 +523,10 @@ impl Repl {
             "embed" => self.cmd_embed(args).await,
             "search" => self.cmd_search(args),
             "tools" => self.cmd_tools(args),
+            "export" => self.cmd_export(args),
+            "import" => self.cmd_import(args),
+            "fork" => self.cmd_fork(),
+            "models" => self.cmd_models(args),
             "" => {}
             other => {
                 println!(
@@ -547,6 +574,10 @@ impl Repl {
             "/search [query]",
             "fuzzy picker over all conversation messages",
         );
+        help_row("/export <path>", "write the active conversation to JSON");
+        help_row("/import <path>", "load a JSON conversation as a new entry");
+        help_row("/fork", "duplicate the active conversation");
+        help_row("/models [provider]", "list a provider's recommended models");
         help_row("/tools", "list tools (✓ enabled · · disabled)");
         help_row(
             "/tools disable <name>",
@@ -1242,6 +1273,148 @@ impl Repl {
         }
     }
 
+    fn cmd_export(&self, args: &str) {
+        if args.is_empty() {
+            println!(
+                "{err}usage: /export <path>{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
+            return;
+        }
+        let conv = self.store.active();
+        let json = match serde_json::to_string_pretty(conv) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("{err}serialize: {e}{reset}", err = C_ERR, reset = C_RESET);
+                return;
+            }
+        };
+        match std::fs::write(args, json) {
+            Ok(_) => println!(
+                "{meta}exported {} -> {args}{reset}",
+                conv.title,
+                meta = C_META,
+                reset = C_RESET
+            ),
+            Err(e) => println!("{err}write: {e}{reset}", err = C_ERR, reset = C_RESET),
+        }
+    }
+
+    fn cmd_import(&mut self, args: &str) {
+        if args.is_empty() {
+            println!(
+                "{err}usage: /import <path>{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
+            return;
+        }
+        let bytes = match std::fs::read(args) {
+            Ok(b) => b,
+            Err(e) => {
+                println!("{err}read: {e}{reset}", err = C_ERR, reset = C_RESET);
+                return;
+            }
+        };
+        let mut conv: crate::store::Conversation = match serde_json::from_slice(&bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("{err}parse: {e}{reset}", err = C_ERR, reset = C_RESET);
+                return;
+            }
+        };
+        // Re-key with a fresh id so an imported copy can coexist with
+        // the original (or with a previous import of the same file).
+        conv.id = crate::store::next_id();
+        let title = conv.title.clone();
+        self.store.conversations.push(conv);
+        self.store.active = self.store.conversations.len() - 1;
+        self.save_ignore_err();
+        println!(
+            "{meta}imported -> {title}{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
+    }
+
+    fn cmd_fork(&mut self) {
+        let mut clone = self.store.active().clone();
+        clone.id = crate::store::next_id();
+        // Mark the fork distinctly. If the title already ends with
+        // `(fork)` we still append, so chained forks read as
+        // `foo (fork) (fork)` — easier than counting.
+        clone.title = format!("{} (fork)", clone.title);
+        let new_title = clone.title.clone();
+        self.store.conversations.push(clone);
+        self.store.active = self.store.conversations.len() - 1;
+        self.save_ignore_err();
+        println!(
+            "{meta}forked -> {new_title}{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
+    }
+
+    fn cmd_models(&self, args: &str) {
+        let provider_key = if args.is_empty() {
+            self.effective_chat_opts().provider
+        } else {
+            args.to_string()
+        };
+        if provider_key == "local" {
+            match self.state.status().path {
+                Some(p) => println!(
+                    "{meta}local model loaded: {p}{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                ),
+                None => println!(
+                    "{meta}no local model loaded · use {app}/load <gguf>{reset}",
+                    meta = C_META,
+                    app = C_APP,
+                    reset = C_RESET
+                ),
+            }
+            return;
+        }
+        let Some(def) = rezon_core::llm::cloud_provider_def(&provider_key) else {
+            println!(
+                "{err}unknown provider: {provider_key}{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
+            return;
+        };
+        println!(
+            "{bold}{}{bold:#} {meta}({} models){reset}",
+            def.label,
+            def.recommended_models.len(),
+            bold = C_BOLD,
+            meta = C_META,
+            reset = C_RESET
+        );
+        let current = self.effective_chat_opts().model;
+        for m in &def.recommended_models {
+            let active = current.as_deref() == Some(m.as_str());
+            let default = m == &def.default_model;
+            let marker = if active {
+                format!("{C_APP}*{C_APP:#}")
+            } else {
+                " ".to_string()
+            };
+            let suffix = if default {
+                format!(" {C_META}(default){C_META:#}")
+            } else {
+                String::new()
+            };
+            println!("  {marker} {m}{suffix}");
+        }
+        if def.recommended_models.is_empty() {
+            println!("  {meta}(no recommended list){reset}", meta = C_META, reset = C_RESET);
+        }
+    }
+
     fn cmd_history(&self) {
         for m in &self.store.active().messages {
             match m.role.as_str() {
@@ -1358,6 +1531,51 @@ fn rerender_markdown(raw: &str) {
     // \x1b[J clears from the cursor to the end of the screen.
     let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
     let _ = out.write_all(formatted.as_bytes());
+    let _ = out.flush();
+}
+
+/// Update the terminal-window title with a rolling tok/s estimate,
+/// throttled to once every ~200ms. The rate is approximated from
+/// emitted character count divided by 4 (matches the heuristic the
+/// chat path uses when the provider omits usage). No-op when stdout
+/// isn't a tty so piped runs don't pollute the receiving stream
+/// with OSC escapes.
+fn maybe_update_title(
+    stream_start: &Option<std::time::Instant>,
+    last_tick: &mut Option<std::time::Instant>,
+    gen_chars: usize,
+) {
+    use std::io::Write;
+    let Some(start) = stream_start else { return };
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if let Some(prev) = last_tick {
+        if now.duration_since(*prev) < std::time::Duration::from_millis(200) {
+            return;
+        }
+    }
+    *last_tick = Some(now);
+    let secs = now.duration_since(*start).as_secs_f64().max(0.001);
+    let tps = (gen_chars as f64 / 4.0) / secs;
+    // OSC 0: sets both window title and icon name. `\x07` (BEL) is
+    // the legacy terminator; widely supported.
+    let mut out = anstream::stdout().lock();
+    let _ = write!(out, "\x1b]0;rezon · ~{tps:.1} tok/s\x07");
+    let _ = out.flush();
+}
+
+/// Restore the terminal-window title to a neutral value once the
+/// stream ends (or errors / is cancelled). Paired with
+/// `maybe_update_title`.
+fn reset_title() {
+    use std::io::Write;
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let mut out = anstream::stdout().lock();
+    let _ = write!(out, "\x1b]0;rezon\x07");
     let _ = out.flush();
 }
 

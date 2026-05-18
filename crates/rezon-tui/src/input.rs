@@ -37,13 +37,17 @@ pub const COMMANDS: &[&str] = &[
     "delete",
     "embed",
     "exit",
+    "export",
+    "fork",
     "find",
     "h",
     "help",
     "history",
+    "import",
     "load",
     "max-steps",
     "model",
+    "models",
     "new",
     "next",
     "note",
@@ -61,7 +65,7 @@ pub const COMMANDS: &[&str] = &[
 
 /// Verbs whose first argument is a filesystem path. Tab after the
 /// verb + space delegates to `FilenameCompleter`.
-const PATH_COMMANDS: &[&str] = &["load", "embed", "vault", "note"];
+const PATH_COMMANDS: &[&str] = &["load", "embed", "vault", "note", "export", "import"];
 
 pub struct ReplHelper {
     filename: FilenameCompleter,

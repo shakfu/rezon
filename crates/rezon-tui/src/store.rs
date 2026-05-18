@@ -231,7 +231,7 @@ fn config_path() -> Result<PathBuf> {
     Ok(dirs.config_dir().join("conversations.json"))
 }
 
-fn next_id() -> String {
+pub(crate) fn next_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let c = COUNTER.fetch_add(1, Ordering::Relaxed);
     let now = SystemTime::now()
