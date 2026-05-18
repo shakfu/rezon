@@ -40,8 +40,7 @@ impl Provider for LocalProvider {
     ) -> Result<BoxStream<'static, Result<AgentDelta>>> {
         let messages_json = serde_json::to_string(&messages_to_openai_json(messages))
             .context("serialize messages")?;
-        let tools_json =
-            serde_json::to_string(&tools).context("serialize tools")?;
+        let tools_json = serde_json::to_string(&tools).context("serialize tools")?;
 
         let rx = self
             .state

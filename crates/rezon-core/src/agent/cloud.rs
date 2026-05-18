@@ -36,7 +36,11 @@ pub struct CloudProvider {
 }
 
 impl CloudProvider {
-    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>, label: impl Into<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
         let cfg = OpenAIConfig::new()
             .with_api_key(api_key)
             .with_api_base(base_url);
@@ -133,7 +137,12 @@ impl Provider for CloudProvider {
                             .take()
                             .map(map_finish_reason)
                             .unwrap_or(FinishReason::Stop);
-                        return Some((Ok(AgentDelta::Done { finish_reason: reason }), s));
+                        return Some((
+                            Ok(AgentDelta::Done {
+                                finish_reason: reason,
+                            }),
+                            s,
+                        ));
                     }
                     Some(Err(e)) => {
                         return Some((Err(anyhow!("upstream stream error: {e}")), s));
@@ -165,8 +174,10 @@ impl Provider for CloudProvider {
                                             id,
                                             name,
                                         });
-                                        if let Some(args) =
-                                            chunk.function.as_ref().and_then(|f| f.arguments.clone())
+                                        if let Some(args) = chunk
+                                            .function
+                                            .as_ref()
+                                            .and_then(|f| f.arguments.clone())
                                         {
                                             if !args.is_empty() {
                                                 produced.push(AgentDelta::ToolCallArgs {
@@ -223,7 +234,13 @@ impl Provider for CloudProvider {
 }
 
 struct ChunkState {
-    upstream: BoxStream<'static, std::result::Result<async_openai::types::chat::CreateChatCompletionStreamResponse, async_openai::error::OpenAIError>>,
+    upstream: BoxStream<
+        'static,
+        std::result::Result<
+            async_openai::types::chat::CreateChatCompletionStreamResponse,
+            async_openai::error::OpenAIError,
+        >,
+    >,
     cancel: Arc<std::sync::atomic::AtomicBool>,
     provider_label: String,
     started: std::time::Instant,
@@ -277,17 +294,22 @@ fn to_openai_messages(messages: &[ChatMessage]) -> Result<Vec<ChatCompletionRequ
     messages
         .iter()
         .map(|m| match m {
-            ChatMessage::System { content } => Ok(ChatCompletionRequestSystemMessageArgs::default()
-                .content(content.clone())
-                .build()
-                .context("system message")?
-                .into()),
+            ChatMessage::System { content } => {
+                Ok(ChatCompletionRequestSystemMessageArgs::default()
+                    .content(content.clone())
+                    .build()
+                    .context("system message")?
+                    .into())
+            }
             ChatMessage::User { content } => Ok(ChatCompletionRequestUserMessageArgs::default()
                 .content(content.clone())
                 .build()
                 .context("user message")?
                 .into()),
-            ChatMessage::Assistant { content, tool_calls } => {
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let oai_calls: Vec<ChatCompletionMessageToolCalls> = tool_calls
                     .iter()
                     .map(|tc: &ToolCall| {

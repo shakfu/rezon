@@ -163,3 +163,50 @@ impl ToolRegistry {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::tools::register_core_tools;
+
+    #[test]
+    fn registry_register_get_and_names() {
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        let names: Vec<&str> = reg.names().collect();
+        for expected in ["current_time", "file_read", "shell_exec", "web_fetch"] {
+            assert!(
+                names.contains(&expected),
+                "missing tool `{expected}` in {names:?}"
+            );
+        }
+        assert!(reg.get("current_time").is_some());
+        assert!(reg.get("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn registry_without_drops_named_tools() {
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        let trimmed = reg.without(&["shell_exec".to_string(), "web_fetch".to_string()]);
+        let names: Vec<&str> = trimmed.names().collect();
+        assert!(!names.contains(&"shell_exec"));
+        assert!(!names.contains(&"web_fetch"));
+        assert!(names.contains(&"current_time"));
+    }
+
+    #[test]
+    fn openai_schemas_shape() {
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        let schemas = reg.openai_schemas();
+        assert!(!schemas.is_empty());
+        for s in &schemas {
+            assert_eq!(s.get("type").and_then(|v| v.as_str()), Some("function"));
+            let func = s.get("function").expect("function payload");
+            assert!(func.get("name").and_then(|v| v.as_str()).is_some());
+            assert!(func.get("description").and_then(|v| v.as_str()).is_some());
+            assert!(func.get("parameters").is_some());
+        }
+    }
+}

@@ -177,3 +177,130 @@ pub fn count_rows(s: &str, width: u16) -> u16 {
     }
     rows
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The renderer emits SGR escape sequences; we don't assert on
+    // their exact bytes (anstyle decides those) — we look for marker
+    // sub-strings and structural properties instead.
+
+    #[test]
+    fn bold_emits_escape_codes_around_content() {
+        let out = render("**loud**");
+        assert!(out.contains("loud"));
+        // SGR bold opens with `\x1b[` and closes with `m`. Two of
+        // them appear: open + close.
+        let opens: usize = out.matches('\x1b').count();
+        assert!(opens >= 2, "expected at least one open+close SGR: {out:?}");
+    }
+
+    #[test]
+    fn italic_skips_single_word_with_surrounding_spaces() {
+        // "a * b *" must not trigger italic (inner content starts with
+        // a space) — guards against false-positive math/arithmetic.
+        let out = render("compute a * b * c");
+        // Output should still contain the original asterisks because
+        // no italic span matched.
+        assert!(out.contains("*"));
+    }
+
+    #[test]
+    fn inline_code_renders_between_backticks() {
+        let out = render("call `foo()` here");
+        assert!(out.contains("foo()"));
+        // Backticks themselves are consumed.
+        assert!(!out.contains('`'));
+    }
+
+    #[test]
+    fn heading_levels_emit_prefix() {
+        for prefix in ["# ", "## ", "### "] {
+            let line = format!("{prefix}Title");
+            let out = render(&line);
+            assert!(out.contains("Title"), "{prefix}: {out:?}");
+            assert!(out.contains(prefix.trim_end()), "{prefix}: {out:?}");
+        }
+    }
+
+    #[test]
+    fn unordered_and_ordered_lists_get_bullets() {
+        let out = render("- one\n- two");
+        assert!(out.contains("• one"));
+        assert!(out.contains("• two"));
+
+        let out = render("1. first\n2. second");
+        assert!(out.contains("1. first"));
+        assert!(out.contains("2. second"));
+    }
+
+    #[test]
+    fn blockquote_emits_bar_glyph() {
+        let out = render("> note");
+        assert!(out.contains("│ note"));
+    }
+
+    #[test]
+    fn code_fence_dims_body_and_drops_fences() {
+        let out = render("```rust\nfn x() {}\n```");
+        // Language tag is dimmed via the `┄` marker; body printed
+        // with a 2-space indent.
+        assert!(out.contains("rust"));
+        assert!(out.contains("fn x() {}"));
+        // Triple-backtick fences themselves should not survive.
+        assert!(!out.contains("```"));
+    }
+
+    #[test]
+    fn render_always_ends_with_single_newline() {
+        for input in ["hi", "hi\n", "hi\n\n", "# heading"] {
+            let out = render(input);
+            assert!(out.ends_with('\n'), "{input:?} -> {out:?}");
+            assert!(
+                !out.ends_with("\n\n"),
+                "{input:?} -> trailing blank line: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_input_renders_empty_or_single_newline() {
+        let out = render("");
+        // Either empty or "\n" — both are acceptable; we just don't
+        // want crashes or extra content.
+        assert!(out.is_empty() || out == "\n");
+    }
+
+    #[test]
+    fn count_rows_empty_is_zero() {
+        assert_eq!(count_rows("", 80), 0);
+    }
+
+    #[test]
+    fn count_rows_single_line_no_newline() {
+        assert_eq!(count_rows("hello", 80), 1);
+    }
+
+    #[test]
+    fn count_rows_multi_line() {
+        assert_eq!(count_rows("a\nb\nc", 80), 3);
+        // Trailing newline ends the last row; no implicit extra row.
+        assert_eq!(count_rows("a\nb\n", 80), 2);
+    }
+
+    #[test]
+    fn count_rows_wraps_on_width() {
+        // Width 3 on "abcde" should wrap to 2 rows: "abc" + "de".
+        assert_eq!(count_rows("abcde", 3), 2);
+        // Exactly one full row.
+        assert_eq!(count_rows("abc", 3), 1);
+        // Two full rows.
+        assert_eq!(count_rows("abcdef", 3), 2);
+    }
+
+    #[test]
+    fn count_rows_handles_blank_lines() {
+        assert_eq!(count_rows("a\n\nb", 80), 3);
+    }
+}

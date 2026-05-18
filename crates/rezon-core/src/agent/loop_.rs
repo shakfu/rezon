@@ -238,7 +238,10 @@ async fn dispatch_one(
         Value::Object(Default::default())
     } else {
         serde_json::from_str(&call.arguments).map_err(|e| {
-            ToolError::Argument(format!("arguments not valid JSON: {e} (raw: {})", call.arguments))
+            ToolError::Argument(format!(
+                "arguments not valid JSON: {e} (raw: {})",
+                call.arguments
+            ))
         })?
     };
 

@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use rezon_core::agent::{
-    cloud::CloudProvider, local::LocalProvider, run_agent,
+    cloud::CloudProvider,
+    local::LocalProvider,
+    run_agent,
     tools::{register_core_tools, register_search_notes},
     AgentOpts, ChatMessage, ConfirmationGate, Provider, ProviderOpts, ToolRegistry,
 };
@@ -61,6 +63,7 @@ pub struct AgentRunHandle {
     pub cancel: Arc<AtomicBool>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_agent_run(
     state: Arc<LlmState>,
     chat_opts: ChatOpts,
@@ -178,5 +181,149 @@ fn build_agent_messages(history: Vec<ChatMsg>, user_input: String) -> Vec<ChatMe
 impl AgentRunHandle {
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rezon_core::agent::tool::ToolCall;
+
+    #[test]
+    fn chat_messages_to_msgs_preserves_role_content() {
+        let msgs = vec![
+            ChatMessage::system("you are terse"),
+            ChatMessage::user("hi"),
+            ChatMessage::Assistant {
+                content: "hello".into(),
+                tool_calls: vec![],
+            },
+        ];
+        let out = chat_messages_to_msgs(&msgs);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].role, "system");
+        assert_eq!(out[1].role, "user");
+        assert_eq!(out[2].role, "assistant");
+        assert_eq!(out[0].content, "you are terse");
+        assert_eq!(out[1].content, "hi");
+        assert_eq!(out[2].content, "hello");
+        for m in &out {
+            assert!(m.tool_calls.is_empty());
+            assert!(m.tool_call_id.is_none());
+        }
+    }
+
+    #[test]
+    fn chat_messages_to_msgs_preserves_tool_calls_on_assistant() {
+        let msgs = vec![ChatMessage::Assistant {
+            content: "calling".into(),
+            tool_calls: vec![ToolCall {
+                id: "call-1".into(),
+                name: "current_time".into(),
+                arguments: "{}".into(),
+            }],
+        }];
+        let out = chat_messages_to_msgs(&msgs);
+        assert_eq!(out[0].tool_calls.len(), 1);
+        assert_eq!(out[0].tool_calls[0].id, "call-1");
+        assert_eq!(out[0].tool_calls[0].name, "current_time");
+        assert!(out[0].tool_call_id.is_none());
+    }
+
+    #[test]
+    fn chat_messages_to_msgs_tool_role_carries_tool_call_id() {
+        let msgs = vec![ChatMessage::Tool {
+            tool_call_id: "call-1".into(),
+            content: "{\"ok\":true}".into(),
+        }];
+        let out = chat_messages_to_msgs(&msgs);
+        assert_eq!(out[0].role, "tool");
+        assert_eq!(out[0].tool_call_id.as_deref(), Some("call-1"));
+        assert!(out[0].tool_calls.is_empty());
+        assert_eq!(out[0].content, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn build_agent_messages_appends_user_input() {
+        let history = vec![
+            ChatMsg {
+                role: "system".into(),
+                content: "sys".into(),
+                ..ChatMsg::default()
+            },
+            ChatMsg {
+                role: "user".into(),
+                content: "earlier".into(),
+                ..ChatMsg::default()
+            },
+            ChatMsg {
+                role: "assistant".into(),
+                content: "ok".into(),
+                ..ChatMsg::default()
+            },
+        ];
+        let msgs = build_agent_messages(history, "follow-up".into());
+        // 3 carried-over + 1 new user turn = 4.
+        assert_eq!(msgs.len(), 4);
+        assert!(matches!(&msgs[0], ChatMessage::System { content } if content == "sys"));
+        assert!(matches!(&msgs[3], ChatMessage::User { content } if content == "follow-up"));
+    }
+
+    #[test]
+    fn build_agent_messages_replays_tool_calls_and_tool_turns() {
+        // Persisted assistant turn with tool_calls + matching tool
+        // result should be threaded back into ChatMessage form so
+        // the next agent run sees its own prior call.
+        let history = vec![
+            ChatMsg {
+                role: "assistant".into(),
+                content: "calling".into(),
+                tool_calls: vec![ToolCall {
+                    id: "call-1".into(),
+                    name: "current_time".into(),
+                    arguments: "{}".into(),
+                }],
+                tool_call_id: None,
+            },
+            ChatMsg {
+                role: "tool".into(),
+                content: "{\"hour\":12}".into(),
+                tool_call_id: Some("call-1".into()),
+                tool_calls: vec![],
+            },
+        ];
+        let msgs = build_agent_messages(history, "next".into());
+        assert_eq!(msgs.len(), 3);
+        match &msgs[0] {
+            ChatMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].id, "call-1");
+            }
+            other => panic!("expected Assistant, got {other:?}"),
+        }
+        match &msgs[1] {
+            ChatMessage::Tool { tool_call_id, .. } => {
+                assert_eq!(tool_call_id, "call-1");
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_agent_messages_drops_tool_turn_without_id() {
+        // Defensive: if a tool ChatMsg was stored without a
+        // tool_call_id (shouldn't happen post-P7e, but might exist
+        // in legacy stores), it should be skipped rather than
+        // crashing the build.
+        let history = vec![ChatMsg {
+            role: "tool".into(),
+            content: "orphaned".into(),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }];
+        let msgs = build_agent_messages(history, "x".into());
+        // Orphan tool turn dropped; only the new user turn remains.
+        assert_eq!(msgs.len(), 1);
+        assert!(matches!(&msgs[0], ChatMessage::User { .. }));
     }
 }

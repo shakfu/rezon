@@ -95,7 +95,11 @@ impl Tool for WebFetch {
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!("read body: {e}")))?;
         let total = bytes.len();
         let truncated = total > MAX_BYTES;
-        let slice: &[u8] = if truncated { &bytes[..MAX_BYTES] } else { &bytes };
+        let slice: &[u8] = if truncated {
+            &bytes[..MAX_BYTES]
+        } else {
+            &bytes
+        };
         let body = String::from_utf8_lossy(slice).into_owned();
 
         Ok(json!({

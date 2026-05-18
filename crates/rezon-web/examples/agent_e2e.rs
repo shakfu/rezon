@@ -36,7 +36,8 @@ fn main() -> Result<()> {
 
 async fn run(prompt: String) -> Result<()> {
     let api_key = env::var("OPENROUTER_API_KEY").context("OPENROUTER_API_KEY not set")?;
-    let model = env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "anthropic/claude-sonnet-4".to_string());
+    let model =
+        env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "anthropic/claude-sonnet-4".to_string());
 
     let provider: Arc<dyn Provider> = Arc::new(CloudProvider::new(
         api_key,
@@ -77,7 +78,9 @@ async fn run(prompt: String) -> Result<()> {
     println!("\n=== final message log ({}) ===", messages.len());
     for (i, m) in messages.iter().enumerate() {
         match m {
-            ChatMessage::System { content } => println!("  [{i}] system: {}", truncate(content, 80)),
+            ChatMessage::System { content } => {
+                println!("  [{i}] system: {}", truncate(content, 80))
+            }
             ChatMessage::User { content } => println!("  [{i}] user: {}", truncate(content, 80)),
             ChatMessage::Assistant {
                 content,
@@ -95,11 +98,7 @@ async fn run(prompt: String) -> Result<()> {
             ChatMessage::Tool {
                 tool_call_id,
                 content,
-            } => println!(
-                "  [{i}] tool[{}]: {}",
-                tool_call_id,
-                truncate(content, 80)
-            ),
+            } => println!("  [{i}] tool[{}]: {}", tool_call_id, truncate(content, 80)),
         }
     }
 

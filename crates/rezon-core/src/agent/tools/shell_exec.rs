@@ -72,21 +72,20 @@ impl Tool for ShellExec {
         let args: Args = serde_json::from_value(args)
             .map_err(|e| ToolError::Argument(format!("invalid args: {e}")))?;
 
-        let shell =
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
         let mut cmd = Command::new(&shell);
         cmd.arg("-c").arg(&args.command);
         if let Some(dir) = &args.cwd {
             let p = std::path::Path::new(dir);
             if !p.is_absolute() {
-                return Err(ToolError::Argument(format!(
-                    "cwd must be absolute: {dir}"
-                )));
+                return Err(ToolError::Argument(format!("cwd must be absolute: {dir}")));
             }
             cmd.current_dir(p);
         }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
         // Put the child in its own process group so a timeout kill can
         // signal the whole group (the shell + everything it spawned),
         // not just the shell. Without this, a `sh -c "sleep 120"` is

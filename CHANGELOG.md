@@ -66,6 +66,66 @@ All notable changes to this project. Format loosely follows
   calls on legacy Windows; `NO_COLOR` honored.
 - **Makefile targets**: `build-tui`, `build-tui-release`,
   `run-tui ARGS="…"`, `run-tui-release ARGS="…"`.
+- **Markdown rendering** for assistant responses in chat mode. Tokens
+  still stream raw for live feedback; on stream end the REPL counts
+  the rows the raw text occupied (terminal-width-aware), scrolls the
+  cursor back with `\x1b[<n>A\r\x1b[J`, and re-emits the formatted
+  version in place. Hand-rolled renderer (no extra deps) handles
+  `**bold**`, `*italic*`, `` `inline code` ``, `#`/`##`/`###`
+  headings, `-`/`*`/`1.` lists, `> blockquotes`, and triple-backtick
+  fenced code blocks (dimmed, 2-col indent, optional language tag
+  noted as `┄ lang`). Skipped when stdout isn't a tty (piped output
+  keeps raw markdown) and in agent mode (where inline tool pills
+  would be clobbered by the re-render).
+- **Embedded fuzzy picker** (`crossterm` + `nucleo-matcher`, no
+  alt-screen takeover). Renders below the current cursor, scrolls
+  selection into view, cleans up on exit. Bound to:
+  - `/conv` — fuzzy pick over conversation titles (the old plain
+    listing moved to `/conv list`).
+  - `/search [query]` — picker over every non-system / non-tool
+    message across all conversations. Optional argument pre-seeds
+    the filter. Enter switches to the picked conversation and
+    prints the matched message in context.
+  - `/tools enable` / `/tools disable` with no name argument —
+    picker over the disabled / enabled subset respectively.
+  Keys: typing filters, `↑/↓` move, `Enter` selects, `Esc` /
+  `Ctrl-C` cancel.
+- **Tests** — 58 across the workspace, `make test` green.
+  - `rezon-core` (25): vault file ops + path-traversal rejection,
+    `vault_resolve_wikilink` modes, list-tree filtering/sorting,
+    `chunk_markdown` paragraph splitting + char-offset coverage,
+    cloud catalog shape + `resolve_cloud_config` paths,
+    `persist/read_last_model` roundtrip, `to_openai_messages`
+    tool-role filtering + unknown-role rejection, `ChatMsg` /
+    `ChatMessage` serde with optional tool_calls + tool_call_id,
+    `ToolRegistry::register`/`get`/`without`/`openai_schemas`.
+    `tempfile` added as a dev-dependency.
+  - `rezon-tui` (33): markdown renderer (bold / italic edge-case
+    guard / inline code / headings / lists / blockquotes / fenced
+    code) + `count_rows` wrap-aware row math, `picker::truncate`
+    incl. multi-byte chars + max ∈ {0,1}, `Conversation`
+    auto-titling, `Store` save/reload roundtrip via on-disk JSON,
+    `delete_active` index clamping, `chat_messages_to_msgs`
+    role-preserving conversion, `build_agent_messages` replay
+    (carries `tool_calls` on assistant turns + `tool_call_id` on
+    tool turns; drops orphan tool turns).
+- **Workspace hygiene** — `cargo fmt --all` clean and `cargo clippy
+  --workspace --all-targets -D warnings` clean. Lints fixed along
+  the way:
+  - `manual_flatten` in `core::search::vault_search_impl` — switched
+    to `for hit in rows.flatten()`.
+  - `only_used_in_recursion` in `core::vault::read_tree` — dropped
+    the unused `vault: &Path` parameter from the recursive helper.
+  - `collapsible_match` on the picker's Up/Down handlers — rewrote
+    as match guards (`KeyCode::Up if state.selected > 0 =>`).
+  - `items_after_test_module` in `tui::picker` — moved `cleanup`
+    above the test module.
+  - `missing_transmute_annotations` on
+    `core::search::register_sqlite_vec` — `#[allow]` with a comment
+    explaining the cast (both sides are `unsafe extern "C" fn`).
+  - `too_many_arguments` on `tui::agent::spawn_agent_run` —
+    `#[allow]`; collapsing into a struct would only push the
+    bag-of-args one layer in.
 
 ### Changed
 - **Workspace refactor.** Rust code split into a 3-crate Cargo
@@ -111,6 +171,17 @@ All notable changes to this project. Format loosely follows
   receives `Arc<SearchState>` + `Arc<EmbedState>` at construction
   (`register_search_notes(&mut reg, search, embed)`) instead of
   reaching for them through Tauri state.
+- **README** — rewritten for the workspace layout. Now documents
+  both shells (`rezon` GUI + `rezon-tui` REPL), describes the
+  three-crate split with an annotated file tree, has separate
+  Quick-start sections per shell, and lists all `make` targets
+  including the new TUI ones. Build/run instructions for
+  `rezon-tui` make clear it builds with `cargo` alone (no Bun /
+  Tauri prerequisites).
+- **`package.json`** — `tauri` npm script now bakes in
+  `--config crates/rezon-web/tauri.conf.json` so
+  `bun run tauri …` works standalone (no need to go through
+  `make dev` / `make build`).
 - `SearchState::close_vault(path)` added in core so the TUI's
   `/vault close` actually drops the per-vault index + stops its
   file watcher (the GUI doesn't yet surface this).

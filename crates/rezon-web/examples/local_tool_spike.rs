@@ -85,14 +85,26 @@ fn main() -> Result<()> {
         )
         .map_err(|e| anyhow!("apply_chat_template_with_tools_oaicompat: {e}"))?;
 
-    println!("--- rendered prompt ---\n{}\n--- end prompt ---", tmpl_result.prompt);
+    println!(
+        "--- rendered prompt ---\n{}\n--- end prompt ---",
+        tmpl_result.prompt
+    );
     println!("chat_format       = {}", tmpl_result.chat_format);
     println!("parse_tool_calls  = {}", tmpl_result.parse_tool_calls);
-    println!("grammar           = {}", short_present(&tmpl_result.grammar));
+    println!(
+        "grammar           = {}",
+        short_present(&tmpl_result.grammar)
+    );
     println!("grammar_lazy      = {}", tmpl_result.grammar_lazy);
-    println!("grammar_triggers  = {} entries", tmpl_result.grammar_triggers.len());
+    println!(
+        "grammar_triggers  = {} entries",
+        tmpl_result.grammar_triggers.len()
+    );
     for t in &tmpl_result.grammar_triggers {
-        println!("  - {:?}: {:?} (token={:?})", t.trigger_type, t.value, t.token);
+        println!(
+            "  - {:?}: {:?} (token={:?})",
+            t.trigger_type, t.value, t.token
+        );
     }
     println!("preserved_tokens  = {:?}", tmpl_result.preserved_tokens);
     println!("additional_stops  = {:?}", tmpl_result.additional_stops);
@@ -125,7 +137,8 @@ fn main() -> Result<()> {
             .add(*t, i as i32, &[0], i == last_idx)
             .map_err(|e| anyhow!("batch.add prompt: {e}"))?;
     }
-    ctx.decode(&mut batch).map_err(|e| anyhow!("decode prompt: {e}"))?;
+    ctx.decode(&mut batch)
+        .map_err(|e| anyhow!("decode prompt: {e}"))?;
 
     println!("\n=== building sampler ===");
     let sampler = build_sampler(&model, &tmpl_result)?;
@@ -142,7 +155,11 @@ fn main() -> Result<()> {
     let mut produced = 0i32;
     let max_new = MAX_NEW_TOKENS.min(N_CTX as i32 - n_cur - 8).max(0);
 
-    let stops: Vec<&str> = tmpl_result.additional_stops.iter().map(String::as_str).collect();
+    let stops: Vec<&str> = tmpl_result
+        .additional_stops
+        .iter()
+        .map(String::as_str)
+        .collect();
     let mut hit_stop = false;
 
     while produced < max_new {
@@ -193,7 +210,8 @@ fn main() -> Result<()> {
             .map_err(|e| anyhow!("batch.add gen: {e}"))?;
         n_cur += 1;
         produced += 1;
-        ctx.decode(&mut batch).map_err(|e| anyhow!("decode gen: {e}"))?;
+        ctx.decode(&mut batch)
+            .map_err(|e| anyhow!("decode gen: {e}"))?;
     }
 
     // Final flush: tell the parser the stream is complete so it can emit
@@ -307,8 +325,9 @@ fn build_sampler(
             trigger_words.len(),
             trigger_tokens.len()
         );
-        let lazy = LlamaSampler::grammar_lazy(model, grammar_str, "root", &trigger_words, &trigger_tokens)
-            .context("grammar_lazy")?;
+        let lazy =
+            LlamaSampler::grammar_lazy(model, grammar_str, "root", &trigger_words, &trigger_tokens)
+                .context("grammar_lazy")?;
         let mut chain = vec![lazy];
         chain.extend(tail);
         Ok(LlamaSampler::chain_simple(chain))

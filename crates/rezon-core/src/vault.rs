@@ -39,15 +39,12 @@ fn within(vault: &Path, target: &Path) -> Result<(), String> {
     let v = normalize(vault);
     let t = normalize(target);
     if !t.starts_with(&v) {
-        return Err(format!(
-            "path {:?} is outside vault {:?}",
-            target, vault
-        ));
+        return Err(format!("path {:?} is outside vault {:?}", target, vault));
     }
     Ok(())
 }
 
-fn read_tree(dir: &Path, vault: &Path) -> Result<Vec<VaultEntry>, String> {
+fn read_tree(dir: &Path) -> Result<Vec<VaultEntry>, String> {
     let mut entries: Vec<VaultEntry> = Vec::new();
     let read = fs::read_dir(dir).map_err(|e| format!("read_dir {:?}: {e}", dir))?;
     for ent in read.flatten() {
@@ -59,7 +56,7 @@ fn read_tree(dir: &Path, vault: &Path) -> Result<Vec<VaultEntry>, String> {
         let kind = ent.file_type().map_err(|e| e.to_string())?;
         let path_str = path.to_string_lossy().to_string();
         if kind.is_dir() {
-            let children = read_tree(&path, vault)?;
+            let children = read_tree(&path)?;
             entries.push(VaultEntry::Dir {
                 name,
                 path: path_str,
@@ -96,7 +93,7 @@ pub fn vault_list_tree(vault: String) -> Result<Vec<VaultEntry>, String> {
     if !root.is_dir() {
         return Err(format!("vault root is not a directory: {vault}"));
     }
-    read_tree(&root, &root)
+    read_tree(&root)
 }
 
 pub fn vault_read(vault: String, path: String) -> Result<String, String> {
@@ -260,4 +257,133 @@ fn find_by_stem(dir: &Path, stem_lower: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn touch(dir: &Path, rel: &str, body: &str) -> PathBuf {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn read_write_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path().to_string_lossy().to_string();
+        let path = touch(dir.path(), "note.md", "hello")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(vault_read(vault.clone(), path.clone()).unwrap(), "hello");
+        vault_write(vault.clone(), path.clone(), "world".to_string()).unwrap();
+        assert_eq!(vault_read(vault, path).unwrap(), "world");
+    }
+
+    #[test]
+    fn write_outside_vault_rejected() {
+        let inside = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let escape = outside.path().join("evil.md");
+        let err = vault_write(
+            inside.path().to_string_lossy().to_string(),
+            escape.to_string_lossy().to_string(),
+            "pwned".to_string(),
+        )
+        .unwrap_err();
+        assert!(err.contains("outside vault"), "got: {err}");
+        assert!(!escape.exists(), "escape path should not have been written");
+    }
+
+    #[test]
+    fn parentdir_traversal_normalized() {
+        // `vault/sub/../../escape` normalises to `escape`, which is
+        // outside the vault. The `within` check should catch it even
+        // though the literal path contains the vault prefix.
+        let inside = TempDir::new().unwrap();
+        let target = inside
+            .path()
+            .join("sub")
+            .join("..")
+            .join("..")
+            .join("escape.md");
+        let err = vault_write(
+            inside.path().to_string_lossy().to_string(),
+            target.to_string_lossy().to_string(),
+            "x".to_string(),
+        )
+        .unwrap_err();
+        assert!(err.contains("outside vault"), "got: {err}");
+    }
+
+    #[test]
+    fn list_tree_filters_and_sorts() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        touch(root, "alpha.md", "");
+        touch(root, "Beta.md", "");
+        touch(root, ".hidden.md", ""); // hidden — excluded
+        touch(root, "notes.txt", ""); // non-markdown — excluded
+        touch(root, "sub/zeta.md", "");
+        touch(root, "sub/a-readme.markdown", "");
+        let entries = vault_list_tree(root.to_string_lossy().to_string()).unwrap();
+        // Top level: one dir (sub) before files; files sorted
+        // case-insensitively.
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                VaultEntry::Dir { name, .. } => name.as_str(),
+                VaultEntry::File { name, .. } => name.as_str(),
+            })
+            .collect();
+        assert_eq!(names, vec!["sub", "alpha.md", "Beta.md"]);
+        // Hidden + non-markdown are absent.
+        assert!(!names.iter().any(|n| n.starts_with('.')));
+        assert!(!names.iter().any(|n| n.ends_with(".txt")));
+    }
+
+    #[test]
+    fn resolve_wikilink_exact_then_stem() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        touch(dir.path(), "sub/Project Notes.md", "");
+
+        // Exact relative path with extension.
+        let r = vault_resolve_wikilink(root.clone(), "sub/Project Notes.md".into(), false).unwrap();
+        assert!(r.path.ends_with("Project Notes.md"));
+        assert!(!r.created);
+
+        // Stem match, case-insensitive, anywhere in the tree.
+        let r = vault_resolve_wikilink(root.clone(), "project notes".into(), false).unwrap();
+        assert!(r.path.ends_with("Project Notes.md"));
+        assert!(!r.created);
+
+        // Missing target without create_if_missing -> error.
+        let err = vault_resolve_wikilink(root.clone(), "missing".into(), false).unwrap_err();
+        assert!(err.contains("not found"), "got: {err}");
+
+        // Missing target with create_if_missing -> file is created at root.
+        let r = vault_resolve_wikilink(root, "fresh".into(), true).unwrap();
+        assert!(r.created);
+        assert!(r.path.ends_with("fresh.md"));
+        assert!(Path::new(&r.path).is_file());
+    }
+
+    #[test]
+    fn delete_then_rename() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path().to_string_lossy().to_string();
+        let a = touch(dir.path(), "a.md", "x").to_string_lossy().to_string();
+        let b = dir.path().join("b.md").to_string_lossy().to_string();
+        vault_rename(vault.clone(), a.clone(), b.clone()).unwrap();
+        assert!(!Path::new(&a).exists());
+        assert!(Path::new(&b).exists());
+        vault_delete(vault, b.clone()).unwrap();
+        assert!(!Path::new(&b).exists());
+    }
 }

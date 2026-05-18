@@ -17,7 +17,7 @@ pub mod tool;
 pub mod tools;
 
 pub use cloud::CloudProvider;
-pub use confirm::{AutoApproveGate, ConfirmationGate, ConfirmationOutcome, next_confirmation_id};
+pub use confirm::{next_confirmation_id, AutoApproveGate, ConfirmationGate, ConfirmationOutcome};
 pub use delta::{AgentDelta, FinishReason, StreamStats};
 pub use event::{AgentEvent, EventSink, LogEventSink};
 pub use local::LocalProvider;

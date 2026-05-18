@@ -101,12 +101,14 @@ impl Repl {
         // Auto-open the most recently used vault on launch.
         if let Some(path) = self.store.active_vault.clone() {
             if let Err(e) = self.vault.open(&path) {
-                eprintln!("{meta}auto-open vault failed: {e}{reset}",
-                          meta = C_META, reset = C_RESET);
+                eprintln!(
+                    "{meta}auto-open vault failed: {e}{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
                 self.store.active_vault = None;
             } else {
-                println!("{meta}vault: {path}{reset}",
-                         meta = C_META, reset = C_RESET);
+                println!("{meta}vault: {path}{reset}", meta = C_META, reset = C_RESET);
                 println!();
             }
         }
@@ -189,8 +191,11 @@ impl Repl {
             reset = C_RESET,
         );
         if self.agent_mode {
-            println!("agent mode is on (use {app}/chat{reset} to disable)",
-                     app = C_APP, reset = C_RESET);
+            println!(
+                "agent mode is on (use {app}/chat{reset} to disable)",
+                app = C_APP,
+                reset = C_RESET
+            );
         }
         println!();
     }
@@ -419,7 +424,11 @@ impl Repl {
             "tools" => self.cmd_tools(args),
             "" => {}
             other => {
-                println!("{err}unknown command:{reset} /{other}", err = C_ERR, reset = C_RESET);
+                println!(
+                    "{err}unknown command:{reset} /{other}",
+                    err = C_ERR,
+                    reset = C_RESET
+                );
             }
         }
         CmdResult::Continue
@@ -433,7 +442,8 @@ impl Repl {
         help_row("/help", "this list");
         help_row("/exit", "quit");
         help_row("/new", "start a new conversation");
-        help_row("/conv", "list conversations");
+        help_row("/conv", "fuzzy picker over conversations");
+        help_row("/conv list", "plain numbered listing");
         help_row("/conv <n>", "switch to conversation n (1-indexed)");
         help_row("/next /prev", "cycle conversations");
         help_row("/rename <title>", "rename current conversation");
@@ -448,17 +458,32 @@ impl Repl {
         help_row("/system [text]", "set system prompt (no arg shows current)");
         help_row("/load <gguf>", "load local model in-session");
         help_row("/history", "show current conversation history");
-        help_row("/search <query>", "search across all conversations");
+        help_row(
+            "/search [query]",
+            "fuzzy picker over all conversation messages",
+        );
         help_row("/tools", "list tools (✓ enabled · · disabled)");
-        help_row("/tools disable <name>", "drop a tool from the agent registry");
-        help_row("/tools enable <name>", "re-enable a previously disabled tool");
+        help_row(
+            "/tools disable <name>",
+            "drop a tool from the agent registry",
+        );
+        help_row(
+            "/tools enable <name>",
+            "re-enable a previously disabled tool",
+        );
         help_row("/clear", "clear the screen");
         println!();
         println!("vault");
         help_row("/vault", "show open vault");
-        help_row("/vault <path>", "open a vault directory (auto-opens next launch)");
+        help_row(
+            "/vault <path>",
+            "open a vault directory (auto-opens next launch)",
+        );
         help_row("/vault close", "forget the saved vault path");
-        help_row("/note <path>", "read a note from the vault (relative or absolute)");
+        help_row(
+            "/note <path>",
+            "read a note from the vault (relative or absolute)",
+        );
         help_row(
             "/find <query>",
             "search notes (semantic if /embed loaded, FTS5 otherwise)",
@@ -470,17 +495,39 @@ impl Repl {
     fn cmd_new(&mut self) {
         self.store.new_conversation(&self.default_system);
         self.save_ignore_err();
-        println!("{meta}new conversation{reset}", meta = C_META, reset = C_RESET);
+        println!(
+            "{meta}new conversation{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
     }
 
     fn cmd_conv(&mut self, args: &str) {
-        if args.is_empty() {
+        if args == "list" {
             for (i, c) in self.store.conversations.iter().enumerate() {
                 let marker = if i == self.store.active { "*" } else { " " };
+                println!(" {marker} {idx:>2}  {title}", idx = i + 1, title = c.title,);
+            }
+            return;
+        }
+        if args.is_empty() {
+            // Fuzzy picker over conversation titles. Pre-seed with
+            // the current active title so just-pressing-Enter keeps
+            // you on the same conversation.
+            let items: Vec<String> = self
+                .store
+                .conversations
+                .iter()
+                .map(|c| c.title.clone())
+                .collect();
+            if let Some(idx) = crate::picker::pick(items, "conv ", "") {
+                self.store.select(idx);
+                self.save_ignore_err();
                 println!(
-                    " {marker} {idx:>2}  {title}",
-                    idx = i + 1,
-                    title = c.title,
+                    "{meta}-> {title}{reset}",
+                    meta = C_META,
+                    reset = C_RESET,
+                    title = self.store.active().title
                 );
             }
             return;
@@ -523,7 +570,11 @@ impl Repl {
 
     fn cmd_rename(&mut self, args: &str) {
         if args.is_empty() {
-            println!("{err}usage: /rename <title>{reset}", err = C_ERR, reset = C_RESET);
+            println!(
+                "{err}usage: /rename <title>{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
             return;
         }
         self.store.rename_active(args.to_string());
@@ -551,7 +602,11 @@ impl Repl {
             return;
         }
         self.chat_opts.model = Some(args.to_string());
-        println!("{meta}model -> {args}{reset}", meta = C_META, reset = C_RESET);
+        println!(
+            "{meta}model -> {args}{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
     }
 
     fn cmd_provider(&mut self, args: &str) {
@@ -565,14 +620,22 @@ impl Repl {
             return;
         }
         self.chat_opts.provider = args.to_string();
-        println!("{meta}provider -> {args}{reset}", meta = C_META, reset = C_RESET);
+        println!(
+            "{meta}provider -> {args}{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
     }
 
     fn cmd_max_steps(&mut self, args: &str) {
         match args.parse::<usize>() {
             Ok(n) if n > 0 => {
                 self.max_steps = n;
-                println!("{meta}max-steps -> {n}{reset}", meta = C_META, reset = C_RESET);
+                println!(
+                    "{meta}max-steps -> {n}{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
             }
             _ => println!(
                 "{err}usage: /max-steps <positive integer>{reset}",
@@ -586,10 +649,17 @@ impl Repl {
         if args.is_empty() {
             let current = self.store.active().system.clone();
             if current.trim().is_empty() {
-                println!("{meta}no system prompt set for this conversation{reset}",
-                         meta = C_META, reset = C_RESET);
+                println!(
+                    "{meta}no system prompt set for this conversation{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
             } else {
-                println!("{meta}current system prompt:{reset}", meta = C_META, reset = C_RESET);
+                println!(
+                    "{meta}current system prompt:{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
                 for line in current.lines() {
                     println!("  {line}");
                 }
@@ -598,18 +668,30 @@ impl Repl {
         }
         self.set_active_system(args.to_string());
         self.save_ignore_err();
-        println!("{meta}system prompt updated{reset}", meta = C_META, reset = C_RESET);
+        println!(
+            "{meta}system prompt updated{reset}",
+            meta = C_META,
+            reset = C_RESET
+        );
     }
 
     async fn cmd_load(&self, args: &str) {
         if args.is_empty() {
-            println!("{err}usage: /load <gguf path>{reset}", err = C_ERR, reset = C_RESET);
+            println!(
+                "{err}usage: /load <gguf path>{reset}",
+                err = C_ERR,
+                reset = C_RESET
+            );
             return;
         }
         let label = format!("loading {}", basename(args));
         let result = crate::spinner::with_spinner(label, self.state.load(args.to_string())).await;
         match result {
-            Ok(_) => println!("{meta}local model loaded{reset}", meta = C_META, reset = C_RESET),
+            Ok(_) => println!(
+                "{meta}local model loaded{reset}",
+                meta = C_META,
+                reset = C_RESET
+            ),
             Err(e) => println!("{err}load: {e}{reset}", err = C_ERR, reset = C_RESET),
         }
     }
@@ -624,7 +706,11 @@ impl Repl {
         let mut reg = ToolRegistry::new();
         register_core_tools(&mut reg);
         if self.vault.active_vault().is_some() {
-            register_search_notes(&mut reg, self.vault.search.clone(), self.vault.embed.clone());
+            register_search_notes(
+                &mut reg,
+                self.vault.search.clone(),
+                self.vault.embed.clone(),
+            );
         }
         let all: Vec<String> = reg.names().map(str::to_string).collect();
 
@@ -658,43 +744,72 @@ impl Repl {
                 }
             }
             "disable" => {
-                if name.is_empty() {
-                    println!(
-                        "{err}usage: /tools disable <name>{reset}",
-                        err = C_ERR,
-                        reset = C_RESET
-                    );
-                    return;
-                }
-                if !all.iter().any(|n| n == name) {
+                let pick_name = if name.is_empty() {
+                    let enabled: Vec<String> = all
+                        .iter()
+                        .filter(|n| !self.store.disabled_tools.iter().any(|d| d == *n))
+                        .cloned()
+                        .collect();
+                    if enabled.is_empty() {
+                        println!(
+                            "{meta}all tools already disabled{reset}",
+                            meta = C_META,
+                            reset = C_RESET
+                        );
+                        return;
+                    }
+                    match crate::picker::pick(enabled.clone(), "disable ", "") {
+                        Some(i) => enabled[i].clone(),
+                        None => return,
+                    }
+                } else if all.iter().any(|n| n == name) {
+                    name.to_string()
+                } else {
                     println!(
                         "{err}unknown tool: {name}{reset}",
                         err = C_ERR,
                         reset = C_RESET
                     );
                     return;
-                }
-                if !self.store.disabled_tools.iter().any(|d| d == name) {
-                    self.store.disabled_tools.push(name.to_string());
+                };
+                if !self.store.disabled_tools.iter().any(|d| d == &pick_name) {
+                    self.store.disabled_tools.push(pick_name.clone());
                     self.save_ignore_err();
                 }
-                println!("{meta}disabled: {name}{reset}", meta = C_META, reset = C_RESET);
+                println!(
+                    "{meta}disabled: {pick_name}{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
             }
             "enable" => {
-                if name.is_empty() {
-                    println!(
-                        "{err}usage: /tools enable <name>{reset}",
-                        err = C_ERR,
-                        reset = C_RESET
-                    );
-                    return;
-                }
+                let pick_name = if name.is_empty() {
+                    let disabled = self.store.disabled_tools.clone();
+                    if disabled.is_empty() {
+                        println!(
+                            "{meta}no disabled tools{reset}",
+                            meta = C_META,
+                            reset = C_RESET
+                        );
+                        return;
+                    }
+                    match crate::picker::pick(disabled.clone(), "enable ", "") {
+                        Some(i) => disabled[i].clone(),
+                        None => return,
+                    }
+                } else {
+                    name.to_string()
+                };
                 let before = self.store.disabled_tools.len();
-                self.store.disabled_tools.retain(|d| d != name);
+                self.store.disabled_tools.retain(|d| d != &pick_name);
                 if self.store.disabled_tools.len() != before {
                     self.save_ignore_err();
                 }
-                println!("{meta}enabled: {name}{reset}", meta = C_META, reset = C_RESET);
+                println!(
+                    "{meta}enabled: {pick_name}{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
             }
             other => {
                 println!(
@@ -706,15 +821,79 @@ impl Repl {
         }
     }
 
-    fn cmd_search(&self, args: &str) {
-        if args.is_empty() {
+    fn cmd_search(&mut self, args: &str) {
+        // Build candidates: one entry per non-system / non-tool
+        // message, tagged with `(conv_idx, msg_idx)` so a pick can
+        // route us back to the right conversation. The display
+        // string is what the matcher sees — keep it human-readable
+        // (you / rzn marker + first-line snippet + conv title).
+        struct Candidate {
+            display: String,
+            conv_idx: usize,
+            msg_idx: usize,
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for (ci, conv) in self.store.conversations.iter().enumerate() {
+            for (mi, m) in conv.messages.iter().enumerate() {
+                if matches!(m.role.as_str(), "system" | "tool") {
+                    continue;
+                }
+                let role_label = match m.role.as_str() {
+                    "user" => "you",
+                    "assistant" => "rzn",
+                    other => other,
+                };
+                let first_line = m.content.lines().next().unwrap_or("");
+                let snippet: String = first_line.chars().take(80).collect();
+                candidates.push(Candidate {
+                    display: format!("{role_label} · {snippet}  ({})", conv.title),
+                    conv_idx: ci,
+                    msg_idx: mi,
+                });
+            }
+        }
+        if candidates.is_empty() {
             println!(
-                "{err}usage: /search <query>{reset}",
-                err = C_ERR,
+                "{meta}no messages to search{reset}",
+                meta = C_META,
                 reset = C_RESET
             );
             return;
         }
+        let items: Vec<String> = candidates.iter().map(|c| c.display.clone()).collect();
+        let Some(idx) = crate::picker::pick(items, "search ", args) else {
+            return;
+        };
+        let pick = &candidates[idx];
+        // Switch to the picked conversation and print the message
+        // body so the user sees the match in context.
+        if self.store.active != pick.conv_idx {
+            self.store.select(pick.conv_idx);
+            self.save_ignore_err();
+        }
+        let conv = self.store.active();
+        println!(
+            "{meta}-> {title}{reset}",
+            meta = C_META,
+            reset = C_RESET,
+            title = conv.title
+        );
+        println!();
+        let msg = &conv.messages[pick.msg_idx];
+        let role_label = match msg.role.as_str() {
+            "user" => "you",
+            "assistant" => "rzn",
+            other => other,
+        };
+        println!("{meta}{role_label}:{reset}", meta = C_META, reset = C_RESET);
+        for line in msg.content.lines() {
+            println!("  {line}");
+        }
+        println!();
+    }
+
+    #[allow(dead_code)]
+    fn cmd_search_substring(&self, args: &str) {
         let q_lc = args.to_lowercase();
         // Cap output so a popular term doesn't bury the terminal.
         const MAX_LINES_PER_CONV: usize = 6;
@@ -768,11 +947,7 @@ impl Repl {
                     conv_lines += 1;
                     total_lines += 1;
                     if conv_lines >= MAX_LINES_PER_CONV {
-                        println!(
-                            "    {meta}…{reset}",
-                            meta = C_META,
-                            reset = C_RESET
-                        );
+                        println!("    {meta}…{reset}", meta = C_META, reset = C_RESET);
                         break 'msg;
                     }
                     if total_lines >= MAX_TOTAL_LINES {
@@ -826,11 +1001,7 @@ impl Repl {
             self.store.active_vault = None;
             self.save_ignore_err();
             if was_open {
-                println!(
-                    "{meta}vault closed{reset}",
-                    meta = C_META,
-                    reset = C_RESET
-                );
+                println!("{meta}vault closed{reset}", meta = C_META, reset = C_RESET);
             } else {
                 println!(
                     "{meta}no vault to close (forgot persisted path){reset}",
@@ -951,9 +1122,19 @@ impl Repl {
     fn cmd_history(&self) {
         for m in &self.store.active().messages {
             match m.role.as_str() {
-                "user" => println!("{user}> {}{reset}", m.content, user = C_USER, reset = C_RESET),
+                "user" => println!(
+                    "{user}> {}{reset}",
+                    m.content,
+                    user = C_USER,
+                    reset = C_RESET
+                ),
                 "assistant" => println!("{}", m.content),
-                "system" => println!("{dim}[system] {}{reset}", m.content, dim = C_DIM, reset = C_RESET),
+                "system" => println!(
+                    "{dim}[system] {}{reset}",
+                    m.content,
+                    dim = C_DIM,
+                    reset = C_RESET
+                ),
                 "tool" => println!("{tool}{}{reset}", m.content, tool = C_TOOL, reset = C_RESET),
                 _ => println!("[{role}] {}", m.content, role = m.role),
             }

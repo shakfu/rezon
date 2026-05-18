@@ -52,3 +52,71 @@ impl ChatMessage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_user_roundtrip() {
+        let m = ChatMessage::system("you are terse");
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"role\":\"system\""));
+        let back: ChatMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ChatMessage::System { content } if content == "you are terse"));
+    }
+
+    #[test]
+    fn assistant_with_tool_calls_serialises_camel_case_field() {
+        let m = ChatMessage::Assistant {
+            content: "calling".into(),
+            tool_calls: vec![ToolCall {
+                id: "call-1".into(),
+                name: "current_time".into(),
+                arguments: "{}".into(),
+            }],
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"role\":\"assistant\""));
+        // The enum has `#[serde(rename_all_fields = "camelCase")]`,
+        // so the wire field name is `toolCalls`.
+        assert!(
+            json.contains("\"toolCalls\""),
+            "expected camelCase field: {json}"
+        );
+        let back: ChatMessage = serde_json::from_str(&json).unwrap();
+        match back {
+            ChatMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].name, "current_time");
+            }
+            _ => panic!("expected Assistant"),
+        }
+    }
+
+    #[test]
+    fn assistant_without_tool_calls_skips_field() {
+        let m = ChatMessage::Assistant {
+            content: "hi".into(),
+            tool_calls: vec![],
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(
+            !json.contains("toolCalls"),
+            "empty tool_calls should be skipped: {json}"
+        );
+    }
+
+    #[test]
+    fn tool_message_uses_tool_call_id_camel_case() {
+        let m = ChatMessage::Tool {
+            tool_call_id: "call-1".into(),
+            content: "{\"ok\":true}".into(),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"role\":\"tool\""));
+        assert!(json.contains("\"toolCallId\":\"call-1\""));
+        let back: ChatMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
+    }
+}

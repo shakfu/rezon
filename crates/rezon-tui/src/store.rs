@@ -216,3 +216,131 @@ fn next_id() -> String {
         .unwrap_or(0);
     format!("conv-{now}-{c}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Build a Store rooted at the given path (bypasses ProjectDirs)
+    /// for isolated test cases.
+    fn fresh_store(path: PathBuf, default_system: &str) -> Store {
+        Store {
+            path,
+            conversations: vec![Conversation::new(default_system.to_string())],
+            active: 0,
+            active_vault: None,
+            disabled_tools: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn maybe_auto_title_picks_first_user_line() {
+        let mut c = Conversation::new(String::new());
+        assert_eq!(c.title, "untitled");
+        c.messages.push(ChatMsg {
+            role: "user".into(),
+            content: "what is the meaning of life?\nfollow-up".into(),
+            ..ChatMsg::default()
+        });
+        c.maybe_auto_title();
+        assert_eq!(c.title, "what is the meaning of life?");
+    }
+
+    #[test]
+    fn maybe_auto_title_is_idempotent_after_rename() {
+        let mut c = Conversation::new(String::new());
+        c.title = "explicit name".into();
+        c.messages.push(ChatMsg {
+            role: "user".into(),
+            content: "ignored".into(),
+            ..ChatMsg::default()
+        });
+        c.maybe_auto_title();
+        assert_eq!(c.title, "explicit name");
+    }
+
+    #[test]
+    fn maybe_auto_title_clamps_to_max_chars() {
+        let long = "x".repeat(120);
+        let mut c = Conversation::new(String::new());
+        c.messages.push(ChatMsg {
+            role: "user".into(),
+            content: long.clone(),
+            ..ChatMsg::default()
+        });
+        c.maybe_auto_title();
+        assert!(c.title.chars().count() <= 48);
+        assert!(c.title.chars().all(|ch| ch == 'x'));
+    }
+
+    #[test]
+    fn save_then_reload_via_storefile_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("conv.json");
+        let mut s = fresh_store(path.clone(), "you are terse");
+        s.active_vault = Some("/path/to/notes".into());
+        s.disabled_tools.push("shell_exec".into());
+        s.active_mut().title = "after lunch".into();
+        s.active_mut().messages.push(ChatMsg {
+            role: "user".into(),
+            content: "hi".into(),
+            ..ChatMsg::default()
+        });
+        s.save().unwrap();
+        // Re-parse via the StoreFile shape directly so we don't drag
+        // ProjectDirs into the test.
+        let bytes = std::fs::read(&path).unwrap();
+        let file: StoreFile = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(file.version, SCHEMA_VERSION);
+        assert_eq!(file.active_vault.as_deref(), Some("/path/to/notes"));
+        assert_eq!(file.disabled_tools, vec!["shell_exec".to_string()]);
+        assert_eq!(file.conversations.len(), 1);
+        assert_eq!(file.conversations[0].title, "after lunch");
+        assert_eq!(file.active_id.as_ref(), Some(&file.conversations[0].id));
+    }
+
+    #[test]
+    fn new_conversation_appends_and_activates() {
+        let dir = TempDir::new().unwrap();
+        let mut s = fresh_store(dir.path().join("c.json"), "");
+        assert_eq!(s.conversations.len(), 1);
+        s.new_conversation("");
+        assert_eq!(s.conversations.len(), 2);
+        assert_eq!(s.active, 1);
+    }
+
+    #[test]
+    fn delete_active_replaces_blank_when_last() {
+        let dir = TempDir::new().unwrap();
+        let mut s = fresh_store(dir.path().join("c.json"), "sys");
+        let original_id = s.active().id.clone();
+        s.delete_active("sys");
+        assert_eq!(s.conversations.len(), 1);
+        // The replacement is a fresh conversation with a new id.
+        assert_ne!(s.active().id, original_id);
+        assert_eq!(s.active, 0);
+    }
+
+    #[test]
+    fn delete_active_clamps_index() {
+        let dir = TempDir::new().unwrap();
+        let mut s = fresh_store(dir.path().join("c.json"), "");
+        s.new_conversation("");
+        s.new_conversation("");
+        assert_eq!(s.conversations.len(), 3);
+        s.select(2);
+        s.delete_active("");
+        assert_eq!(s.conversations.len(), 2);
+        assert_eq!(s.active, 1);
+    }
+
+    #[test]
+    fn rename_empty_string_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let mut s = fresh_store(dir.path().join("c.json"), "");
+        let before = s.active().title.clone();
+        s.rename_active("   ".into());
+        assert_eq!(s.active().title, before);
+    }
+}

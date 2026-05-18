@@ -15,9 +15,7 @@ use std::time::Duration;
 
 use std::io::IsTerminal;
 
-const FRAMES: &[&str] = &[
-    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
-];
+const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Run `fut` while displaying a spinner labelled `label`. If stdout
 /// isn't a tty the spinner is suppressed so piped runs stay clean.

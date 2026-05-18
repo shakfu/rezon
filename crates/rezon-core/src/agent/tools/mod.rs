@@ -34,4 +34,3 @@ pub fn register_search_notes(
 ) {
     reg.register(Arc::new(search_notes::SearchNotes::new(search, embed)));
 }
-

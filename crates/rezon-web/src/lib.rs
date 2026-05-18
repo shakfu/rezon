@@ -137,8 +137,12 @@ pub fn run() {
             // exits promptly.
             handle.state::<agent::commands::AgentState>().shutdown();
             handle.state::<std::sync::Arc<llm::LlmState>>().shutdown();
-            handle.state::<std::sync::Arc<embed::EmbedState>>().shutdown();
-            handle.state::<std::sync::Arc<search::SearchState>>().shutdown();
+            handle
+                .state::<std::sync::Arc<embed::EmbedState>>()
+                .shutdown();
+            handle
+                .state::<std::sync::Arc<search::SearchState>>()
+                .shutdown();
         }
     });
 }

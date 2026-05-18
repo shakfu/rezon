@@ -8,6 +8,7 @@
 mod agent;
 mod input;
 mod markdown;
+mod picker;
 mod repl;
 mod sink;
 mod spinner;

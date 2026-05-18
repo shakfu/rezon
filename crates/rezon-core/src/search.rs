@@ -31,6 +31,12 @@ use std::time::{Duration, SystemTime};
 /// by `rusqlite::Connection::open`) has `vec_*` functions available and
 /// can `CREATE VIRTUAL TABLE ... USING vec0(...)`.
 pub fn register_sqlite_vec() {
+    // We re-type sqlite-vec's init function (its public symbol is
+    // exposed as an extern "C" raw fn) into the signature
+    // sqlite3_auto_extension wants. Source and target are both
+    // `unsafe extern "C" fn(...) -> ...` with the same calling
+    // convention; the cast is sound, just opaque to the compiler.
+    #[allow(clippy::missing_transmute_annotations)]
     unsafe {
         rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
             sqlite_vec::sqlite3_vec_init as *const (),
@@ -145,11 +151,14 @@ fn vault_db_path(data_dir: &Path, vault: &Path) -> Result<PathBuf, String> {
         let mut h = Sha256::new();
         h.update(vault.to_string_lossy().as_bytes());
         let digest = h.finalize();
-        let hex: String = digest.iter().take(8).map(|b| format!("{:02x}", b)).collect();
+        let hex: String = digest
+            .iter()
+            .take(8)
+            .map(|b| format!("{:02x}", b))
+            .collect();
         hex
     };
-    fs::create_dir_all(data_dir.join("vaults"))
-        .map_err(|e| format!("create app data dir: {e}"))?;
+    fs::create_dir_all(data_dir.join("vaults")).map_err(|e| format!("create app data dir: {e}"))?;
     Ok(data_dir.join("vaults").join(format!("{key}.db")))
 }
 
@@ -190,9 +199,7 @@ fn init_schema(db: &Connection) -> rusqlite::Result<()> {
 fn reset_vec_table(db: &Connection, dim: usize) -> rusqlite::Result<()> {
     db.execute("DROP TABLE IF EXISTS vec_chunks", [])?;
     db.execute(
-        &format!(
-            "CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[{dim}])"
-        ),
+        &format!("CREATE VIRTUAL TABLE vec_chunks USING vec0(embedding float[{dim}])"),
         [],
     )?;
     db.execute("UPDATE chunks SET dirty = 1", [])?;
@@ -556,10 +563,7 @@ fn apply_event(idx: &VaultIndex, event: &Event) {
     }
 }
 
-fn get_or_open(
-    state: &SearchState,
-    vault: &str,
-) -> Result<Arc<Mutex<VaultIndex>>, String> {
+fn get_or_open(state: &SearchState, vault: &str) -> Result<Arc<Mutex<VaultIndex>>, String> {
     let mut map = state.inner.lock().unwrap();
     if let Some(v) = map.get(vault) {
         return Ok(v.clone());
@@ -621,14 +625,11 @@ pub fn vault_search_impl(
         })
         .map_err(|e| format!("query: {e}"))?;
     let mut out = Vec::new();
-    for r in rows {
-        if let Ok(hit) = r {
-            out.push(hit);
-        }
+    for hit in rows.flatten() {
+        out.push(hit);
     }
     Ok(out)
 }
-
 
 // ---- Vector helpers (used by the embedder worker) -------------------
 
@@ -640,10 +641,7 @@ pub struct DirtyChunk {
 
 /// Internal API for the embedder. Returns the (already-open) vault
 /// index for a path, opening it if needed.
-pub fn open_vault(
-    state: &SearchState,
-    vault: &str,
-) -> Result<Arc<Mutex<VaultIndex>>, String> {
+pub fn open_vault(state: &SearchState, vault: &str) -> Result<Arc<Mutex<VaultIndex>>, String> {
     get_or_open(state, vault)
 }
 
@@ -658,9 +656,7 @@ impl VaultIndex {
     pub fn take_dirty_chunks(&self, limit: usize) -> Result<Vec<DirtyChunk>, String> {
         let mut stmt = self
             .db
-            .prepare(
-                "SELECT id, text FROM chunks WHERE dirty = 1 ORDER BY id LIMIT ?1",
-            )
+            .prepare("SELECT id, text FROM chunks WHERE dirty = 1 ORDER BY id LIMIT ?1")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![limit as i64], |r| {
@@ -688,11 +684,7 @@ impl VaultIndex {
     /// what we stored). Groups by file, returning at most one row per
     /// path with the closest chunk's snippet. Used by both the
     /// semantic-search FE command and the `search_notes` agent tool.
-    pub fn knn_search(
-        &self,
-        query: &[f32],
-        limit: usize,
-    ) -> Result<Vec<SearchHit>, String> {
+    pub fn knn_search(&self, query: &[f32], limit: usize) -> Result<Vec<SearchHit>, String> {
         let dim = match self.embed_dim() {
             Some(d) => d,
             None => return Ok(Vec::new()),
@@ -757,10 +749,7 @@ impl VaultIndex {
     }
 
     pub fn write_embeddings(&self, rows: &[(i64, Vec<f32>)]) -> Result<(), String> {
-        let tx = self
-            .db
-            .unchecked_transaction()
-            .map_err(|e| e.to_string())?;
+        let tx = self.db.unchecked_transaction().map_err(|e| e.to_string())?;
         for (id, emb) in rows {
             // vec0 stores fixed-length float arrays; serialize as the
             // raw little-endian byte buffer that sqlite-vec expects.
@@ -768,21 +757,15 @@ impl VaultIndex {
             for f in emb {
                 buf.extend_from_slice(&f.to_le_bytes());
             }
-            tx.execute(
-                "DELETE FROM vec_chunks WHERE rowid = ?1",
-                params![id],
-            )
-            .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM vec_chunks WHERE rowid = ?1", params![id])
+                .map_err(|e| e.to_string())?;
             tx.execute(
                 "INSERT INTO vec_chunks(rowid, embedding) VALUES (?1, ?2)",
                 params![id, buf],
             )
             .map_err(|e| e.to_string())?;
-            tx.execute(
-                "UPDATE chunks SET dirty = 0 WHERE id = ?1",
-                params![id],
-            )
-            .map_err(|e| e.to_string())?;
+            tx.execute("UPDATE chunks SET dirty = 0 WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())
     }
@@ -921,7 +904,11 @@ pub fn vault_related(
             snippet,
         })
         .collect();
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits.truncate(lim as usize);
     Ok(hits)
 }
@@ -936,4 +923,51 @@ pub fn vault_index_touch(state: &SearchState, vault: &str, path: &str) -> Result
     let guard = idx.lock().map_err(|_| "touch lock".to_string())?;
     let _ = upsert_file(&guard.db, Path::new(path));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_markdown_short_input_is_single_chunk() {
+        let chunks = chunk_markdown("hello world\n\nshort note");
+        assert_eq!(chunks.len(), 1);
+        let (start, end, _) = &chunks[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, "hello world\n\nshort note".len());
+    }
+
+    #[test]
+    fn chunk_markdown_splits_on_blank_line_when_window_overflows() {
+        // Two ~1500-char paragraphs separated by blank line should
+        // emit at least two chunks once the cumulative window
+        // exceeds MAX_CHARS (1800).
+        let para_a = "A".repeat(1500);
+        let para_b = "B".repeat(1500);
+        let input = format!("{para_a}\n\n{para_b}");
+        let chunks = chunk_markdown(&input);
+        assert!(
+            chunks.len() >= 2,
+            "expected splitting at the paragraph boundary, got {} chunks",
+            chunks.len()
+        );
+        // First chunk should start at 0; subsequent chunks should
+        // begin at or after the boundary of the previous one.
+        assert_eq!(chunks[0].0, 0);
+        for window in chunks.windows(2) {
+            assert!(window[1].0 >= window[0].0, "char_start must be monotonic");
+        }
+    }
+
+    #[test]
+    fn chunk_markdown_char_offsets_cover_input() {
+        let input = "paragraph one\n\nparagraph two\n\nparagraph three";
+        let chunks = chunk_markdown(input);
+        // The first chunk's start is 0 and the last chunk's end is
+        // the full input length (chunker may include the final
+        // paragraph in a window that spans to text.len()).
+        assert_eq!(chunks.first().unwrap().0, 0);
+        assert_eq!(chunks.last().unwrap().1, input.len());
+    }
 }

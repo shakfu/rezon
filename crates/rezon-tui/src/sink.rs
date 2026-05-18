@@ -90,10 +90,7 @@ impl EventSink for TuiAgentSink {
             AgentEvent::Thinking(_) => return,
             AgentEvent::ToolStart { name, .. } => UiEvent::ToolStart { name },
             AgentEvent::ToolEnd {
-                ok,
-                result,
-                error,
-                ..
+                ok, result, error, ..
             } => UiEvent::ToolEnd {
                 ok,
                 summary: summarize_tool_result(ok, result.as_ref(), error.as_deref()),

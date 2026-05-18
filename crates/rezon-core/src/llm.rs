@@ -172,13 +172,14 @@ impl LlmState {
         let backend = self.ensure_backend().map_err(|e| e.to_string())?;
         let path_for_load = path.clone();
         let backend_for_load = backend.clone();
-        let model = tokio::task::spawn_blocking(move || -> std::result::Result<LlamaModel, String> {
-            let params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
-            LlamaModel::load_from_file(&backend_for_load, Path::new(&path_for_load), &params)
-                .map_err(|e| format!("load_from_file: {e}"))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        let model =
+            tokio::task::spawn_blocking(move || -> std::result::Result<LlamaModel, String> {
+                let params = LlamaModelParams::default().with_n_gpu_layers(N_GPU_LAYERS);
+                LlamaModel::load_from_file(&backend_for_load, Path::new(&path_for_load), &params)
+                    .map_err(|e| format!("load_from_file: {e}"))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
 
         let model = Arc::new(model);
         let (sender, join) = spawn_worker(model, backend);
@@ -343,7 +344,9 @@ pub fn cloud_provider_def(key: &str) -> Option<&'static CloudProviderDef> {
 }
 
 /// Resolve api_key + base_url + model for a non-`local` provider.
-pub fn resolve_cloud_config(opts: &ChatOpts) -> std::result::Result<(String, String, String), String> {
+pub fn resolve_cloud_config(
+    opts: &ChatOpts,
+) -> std::result::Result<(String, String, String), String> {
     let def = cloud_provider_def(&opts.provider)
         .ok_or_else(|| format!("unknown provider: {}", opts.provider))?;
 
@@ -625,9 +628,7 @@ fn run_chat_with_cache(
         .map_err(|e| format!("str_to_token: {e}"))?;
 
     let mut common = 0usize;
-    while common < cached.len()
-        && common < new_tokens.len()
-        && cached[common] == new_tokens[common]
+    while common < cached.len() && common < new_tokens.len() && cached[common] == new_tokens[common]
     {
         common += 1;
     }
@@ -661,10 +662,8 @@ fn run_chat_with_cache(
         .map_err(|e| format!("decode prompt: {e}"))?;
     cached.extend_from_slice(to_add);
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(0.7),
-        LlamaSampler::dist(1234),
-    ]);
+    let mut sampler =
+        LlamaSampler::chain_simple([LlamaSampler::temp(0.7), LlamaSampler::dist(1234)]);
 
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut full = String::new();
@@ -806,10 +805,8 @@ fn run_agent_with_cache(
         .map_err(|e| format!("decode prompt: {e}"))?;
     cached.extend_from_slice(to_add);
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(0.7),
-        LlamaSampler::dist(1234),
-    ]);
+    let mut sampler =
+        LlamaSampler::chain_simple([LlamaSampler::temp(0.7), LlamaSampler::dist(1234)]);
 
     let mut parse_state = tmpl
         .streaming_state_oaicompat()
@@ -931,16 +928,176 @@ fn oai_delta_to_agent_deltas(json: &str, emitted_tool_calls: &mut bool) -> Vec<A
                 });
                 if let Some(args) = args {
                     if !args.is_empty() {
-                        out.push(AgentDelta::ToolCallArgs { index, fragment: args });
+                        out.push(AgentDelta::ToolCallArgs {
+                            index,
+                            fragment: args,
+                        });
                     }
                 }
             } else if let Some(args) = args {
                 if !args.is_empty() {
-                    out.push(AgentDelta::ToolCallArgs { index, fragment: args });
+                    out.push(AgentDelta::ToolCallArgs {
+                        index,
+                        fragment: args,
+                    });
                 }
             }
         }
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn cloud_catalog_has_expected_providers() {
+        let catalog = cloud_providers_catalog();
+        let keys: Vec<&str> = catalog.iter().map(|p| p.key.as_str()).collect();
+        // models.json ships with these four; the catalog parse panics
+        // at startup if the file is malformed, so reaching this
+        // assertion already proves the JSON shape is valid.
+        for k in ["openai", "anthropic", "openrouter", "other"] {
+            assert!(keys.contains(&k), "missing provider `{k}` in {keys:?}");
+        }
+        // `other` is user-configurable; named providers aren't.
+        let other = cloud_provider_def("other").unwrap();
+        assert!(other.user_configurable);
+        let openai = cloud_provider_def("openai").unwrap();
+        assert!(!openai.user_configurable);
+        assert!(openai
+            .recommended_models
+            .iter()
+            .any(|m| m.starts_with("gpt-")));
+    }
+
+    #[test]
+    fn cloud_provider_def_unknown_returns_none() {
+        assert!(cloud_provider_def("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn resolve_cloud_config_other_requires_base_url() {
+        let opts = ChatOpts {
+            provider: "other".into(),
+            model: Some("foo".into()),
+            base_url: None,
+            api_key: None,
+        };
+        let err = resolve_cloud_config(&opts).unwrap_err();
+        assert!(err.contains("base URL"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_cloud_config_other_happy_path() {
+        let opts = ChatOpts {
+            provider: "other".into(),
+            model: Some("llama3".into()),
+            base_url: Some("http://localhost:11434/v1".into()),
+            api_key: None, // empty key allowed for local OpenAI-compat servers
+        };
+        let (key, base, model) = resolve_cloud_config(&opts).unwrap();
+        assert_eq!(key, "no-key");
+        assert_eq!(base, "http://localhost:11434/v1");
+        assert_eq!(model, "llama3");
+    }
+
+    #[test]
+    fn resolve_cloud_config_unknown_provider_errors() {
+        let opts = ChatOpts {
+            provider: "wat".into(),
+            model: None,
+            base_url: None,
+            api_key: None,
+        };
+        let err = resolve_cloud_config(&opts).unwrap_err();
+        assert!(err.contains("unknown provider"), "got: {err}");
+    }
+
+    #[test]
+    fn persist_and_read_last_model_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        // Reading an absent file returns None.
+        assert!(read_last_model(dir.path()).is_none());
+        // Persist then read.
+        persist_last_model(dir.path(), "/models/llama3.gguf");
+        assert_eq!(
+            read_last_model(dir.path()).as_deref(),
+            Some("/models/llama3.gguf")
+        );
+        // Empty file is treated as None.
+        std::fs::write(dir.path().join("last_model.txt"), "   \n").unwrap();
+        assert!(read_last_model(dir.path()).is_none());
+    }
+
+    #[test]
+    fn to_openai_messages_drops_tool_role() {
+        // The chat path's openai-mapping should skip tool turns
+        // (they belong to the agent path) so a mixed history can
+        // still flow through the cloud endpoint.
+        let msgs = vec![
+            ChatMsg {
+                role: "system".into(),
+                content: "you are terse".into(),
+                ..Default::default()
+            },
+            ChatMsg {
+                role: "user".into(),
+                content: "hi".into(),
+                ..Default::default()
+            },
+            ChatMsg {
+                role: "assistant".into(),
+                content: "hello".into(),
+                ..Default::default()
+            },
+            ChatMsg {
+                role: "tool".into(),
+                content: "{}".into(),
+                tool_call_id: Some("call-1".into()),
+                ..Default::default()
+            },
+        ];
+        let openai = to_openai_messages(msgs).unwrap();
+        assert_eq!(openai.len(), 3, "tool turn should have been filtered");
+    }
+
+    #[test]
+    fn to_openai_messages_rejects_unknown_role() {
+        let msgs = vec![ChatMsg {
+            role: "function".into(),
+            content: "x".into(),
+            ..Default::default()
+        }];
+        let err = to_openai_messages(msgs).unwrap_err();
+        assert!(err.contains("unknown role"), "got: {err}");
+    }
+
+    #[test]
+    fn chat_msg_serde_preserves_optional_fields() {
+        // Backward-compatible default round-trip: existing stores
+        // without `tool_calls` / `tool_call_id` should load and the
+        // optional fields should round-trip when set.
+        let bare = serde_json::from_str::<ChatMsg>(r#"{"role":"user","content":"hi"}"#).unwrap();
+        assert_eq!(bare.role, "user");
+        assert!(bare.tool_calls.is_empty());
+        assert!(bare.tool_call_id.is_none());
+
+        let full = ChatMsg {
+            role: "tool".into(),
+            content: "{}".into(),
+            tool_call_id: Some("call-1".into()),
+            tool_calls: vec![],
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        // `tool_call_id` should be serialised when present; empty
+        // `tool_calls` is skipped via skip_serializing_if.
+        assert!(json.contains("tool_call_id"));
+        assert!(!json.contains("tool_calls"));
+        let back: ChatMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_call_id.as_deref(), Some("call-1"));
+    }
 }

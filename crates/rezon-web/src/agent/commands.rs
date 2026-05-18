@@ -230,11 +230,7 @@ pub fn cancel_agent(state: State<'_, AgentState>) {
 /// proceeds with Approved or Denied. No-op if `confirmation_id` is
 /// unknown (e.g. the run was cancelled before the user replied).
 #[tauri::command]
-pub fn confirm_tool_call(
-    state: State<'_, AgentState>,
-    confirmation_id: String,
-    approved: bool,
-) {
+pub fn confirm_tool_call(state: State<'_, AgentState>, confirmation_id: String, approved: bool) {
     if let Some(tx) = state.take_pending_confirm(&confirmation_id) {
         let _ = tx.send(approved);
     }

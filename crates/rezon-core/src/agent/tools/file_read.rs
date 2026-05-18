@@ -67,7 +67,11 @@ impl Tool for FileRead {
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!("read {}: {e}", args.path)))?;
         let total = bytes.len();
         let truncated = total > MAX_BYTES;
-        let slice: &[u8] = if truncated { &bytes[..MAX_BYTES] } else { &bytes };
+        let slice: &[u8] = if truncated {
+            &bytes[..MAX_BYTES]
+        } else {
+            &bytes
+        };
         let content = String::from_utf8_lossy(slice).into_owned();
         Ok(json!({
             "path": args.path,

@@ -199,11 +199,7 @@ fn spawn_worker(
     (tx, join)
 }
 
-fn worker_loop(
-    model: Arc<LlamaModel>,
-    backend: Arc<LlamaBackend>,
-    rx: mpsc::Receiver<Request>,
-) {
+fn worker_loop(model: Arc<LlamaModel>, backend: Arc<LlamaBackend>, rx: mpsc::Receiver<Request>) {
     let model_ref: &LlamaModel = &model;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(EMBED_N_CTX))
@@ -261,8 +257,7 @@ fn embed_one(
             .add(*t, i as i32, &[0], i == last)
             .map_err(|e| format!("batch.add: {e}"))?;
     }
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("decode: {e}"))?;
+    ctx.decode(&mut batch).map_err(|e| format!("decode: {e}"))?;
 
     let emb = ctx
         .embeddings_seq_ith(0)
@@ -308,10 +303,7 @@ fn catchup_loop(embed: Arc<EmbedState>, search: Arc<SearchState>, rx: mpsc::Rece
     }
 }
 
-fn drain_all_vaults(
-    embed: &EmbedState,
-    search: &SearchState,
-) -> std::result::Result<(), String> {
+fn drain_all_vaults(embed: &EmbedState, search: &SearchState) -> std::result::Result<(), String> {
     let dim = match embed.status().dim {
         Some(d) => d,
         None => return Ok(()), // model not loaded

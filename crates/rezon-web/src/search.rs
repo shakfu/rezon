@@ -22,10 +22,7 @@ pub fn vault_search(
 }
 
 #[tauri::command]
-pub fn vault_index_open(
-    state: State<'_, Arc<SearchState>>,
-    vault: String,
-) -> Result<(), String> {
+pub fn vault_index_open(state: State<'_, Arc<SearchState>>, vault: String) -> Result<(), String> {
     search::vault_index_open(state.as_ref(), &vault)
 }
 

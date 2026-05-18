@@ -86,19 +86,14 @@ impl EventSink for LogEventSink {
                         result.unwrap_or(Value::Null)
                     );
                 } else {
-                    println!(
-                        "[tool-end err] id={id} error={}",
-                        error.unwrap_or_default()
-                    );
+                    println!("[tool-end err] id={id} error={}", error.unwrap_or_default());
                 }
             }
             AgentEvent::ToolConfirm {
                 confirmation_id,
                 name,
                 arguments,
-            } => println!(
-                "[tool-confirm] cid={confirmation_id} name={name} args={arguments}"
-            ),
+            } => println!("[tool-confirm] cid={confirmation_id} name={name} args={arguments}"),
             AgentEvent::Stats(s) => println!("\n[stats] {s:?}"),
             AgentEvent::Done { .. } => println!("\n[done]"),
             AgentEvent::Cancelled => println!("\n[cancelled]"),
