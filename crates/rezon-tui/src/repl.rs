@@ -215,6 +215,7 @@ impl Repl {
         convo.messages.push(ChatMsg {
             role: "user".to_string(),
             content: user_input.clone(),
+            ..ChatMsg::default()
         });
         convo.maybe_auto_title();
 
@@ -259,6 +260,7 @@ impl Repl {
             self.ui_tx.clone(),
             self.max_steps,
             vault_arg,
+            &self.store.disabled_tools,
         ) {
             Ok(h) => self.agent_handle = Some(h),
             Err(e) => {
@@ -288,6 +290,15 @@ impl Repl {
                         UiEvent::Stats(s) => stats = Some(s),
                         UiEvent::Done => {
                             if newline_pending { println!(); }
+                            // Chat mode: replace the raw streamed
+                            // text with markdown-formatted output.
+                            // Agent mode keeps the raw stream
+                            // because tool pills are interleaved
+                            // with assistant tokens — we'd clobber
+                            // them.
+                            if self.agent_handle.is_none() && !assistant.is_empty() {
+                                rerender_markdown(&assistant);
+                            }
                             if let Some(s) = stats {
                                 print_stats(&s);
                             }
@@ -295,10 +306,17 @@ impl Repl {
                             break;
                         }
                         UiEvent::Error(e) => {
-                            if newline_pending { println!(); }
+                            if newline_pending { println!(); newline_pending = false; }
                             eprintln!("{err}error:{reset} {e}", err = C_ERR, reset = C_RESET);
                             println!();
-                            break;
+                            // Agent runs always emit `AgentHistory`
+                            // + `Done` from the spawn block, even
+                            // on error / cancel — keep draining so
+                            // the snapshot lands. Chat runs have no
+                            // such follow-up, so break immediately.
+                            if self.agent_handle.is_none() {
+                                break;
+                            }
                         }
                         UiEvent::ToolStart { name } => {
                             if newline_pending { println!(); newline_pending = false; }
@@ -313,6 +331,22 @@ impl Repl {
                             if newline_pending { println!(); newline_pending = false; }
                             let approved = prompt_yes_no(&name, &arguments).await;
                             let _ = tx.send(approved);
+                        }
+                        UiEvent::AgentHistory(msgs) => {
+                            // Replace the incrementally-built UI-pill
+                            // representation with the agent loop's
+                            // structured history (assistant turns with
+                            // `tool_calls`, tool-role replies with
+                            // `tool_call_id`). Next agent run will
+                            // replay these so the model sees its own
+                            // prior tool selections.
+                            self.store.active_mut().messages = msgs;
+                            // The `assistant` accumulator was used to
+                            // mirror the streamed assistant text into
+                            // a chat-style ChatMsg at end of turn;
+                            // the snapshot replaces it, so wipe to
+                            // prevent the duplicate push below.
+                            assistant.clear();
                         }
                     }
                 }
@@ -336,6 +370,7 @@ impl Repl {
             self.store.active_mut().messages.push(ChatMsg {
                 role: "assistant".to_string(),
                 content: assistant,
+                ..ChatMsg::default()
             });
         }
         self.agent_handle = None;
@@ -381,6 +416,7 @@ impl Repl {
             "find" => self.cmd_find(args),
             "embed" => self.cmd_embed(args).await,
             "search" => self.cmd_search(args),
+            "tools" => self.cmd_tools(args),
             "" => {}
             other => {
                 println!("{err}unknown command:{reset} /{other}", err = C_ERR, reset = C_RESET);
@@ -393,7 +429,7 @@ impl Repl {
         // Each row is rendered via `help_row` so the verb (and any
         // inline command refs in the description) is highlighted in
         // cyan while the column alignment is preserved.
-        println!("{C_BOLD}commands{C_BOLD:#}");
+        println!("commands");
         help_row("/help", "this list");
         help_row("/exit", "quit");
         help_row("/new", "start a new conversation");
@@ -413,9 +449,12 @@ impl Repl {
         help_row("/load <gguf>", "load local model in-session");
         help_row("/history", "show current conversation history");
         help_row("/search <query>", "search across all conversations");
+        help_row("/tools", "list tools (✓ enabled · · disabled)");
+        help_row("/tools disable <name>", "drop a tool from the agent registry");
+        help_row("/tools enable <name>", "re-enable a previously disabled tool");
         help_row("/clear", "clear the screen");
         println!();
-        println!("{C_BOLD}vault{C_BOLD:#}");
+        println!("vault");
         help_row("/vault", "show open vault");
         help_row("/vault <path>", "open a vault directory (auto-opens next launch)");
         help_row("/vault close", "forget the saved vault path");
@@ -567,10 +606,103 @@ impl Repl {
             println!("{err}usage: /load <gguf path>{reset}", err = C_ERR, reset = C_RESET);
             return;
         }
-        println!("{meta}loading {args}…{reset}", meta = C_META, reset = C_RESET);
-        match self.state.load(args.to_string()).await {
+        let label = format!("loading {}", basename(args));
+        let result = crate::spinner::with_spinner(label, self.state.load(args.to_string())).await;
+        match result {
             Ok(_) => println!("{meta}local model loaded{reset}", meta = C_META, reset = C_RESET),
             Err(e) => println!("{err}load: {e}{reset}", err = C_ERR, reset = C_RESET),
+        }
+    }
+
+    fn cmd_tools(&mut self, args: &str) {
+        // Mirror the registry assembly in `spawn_agent_run` so the
+        // list reflects what the agent actually sees.
+        use rezon_core::agent::{
+            tool::ToolRegistry,
+            tools::{register_core_tools, register_search_notes},
+        };
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        if self.vault.active_vault().is_some() {
+            register_search_notes(&mut reg, self.vault.search.clone(), self.vault.embed.clone());
+        }
+        let all: Vec<String> = reg.names().map(str::to_string).collect();
+
+        let (verb, name) = match args.split_once(char::is_whitespace) {
+            Some((v, n)) => (v.trim(), n.trim()),
+            None => (args.trim(), ""),
+        };
+        match verb {
+            "" | "list" => {
+                for n in &all {
+                    let disabled = self.store.disabled_tools.iter().any(|d| d == n);
+                    let (marker, style) = if disabled {
+                        ("·", C_DIM)
+                    } else {
+                        ("✓", C_OK)
+                    };
+                    let _ = style;
+                    println!(
+                        "  {style}{marker}{reset}  {n}",
+                        marker = marker,
+                        style = if disabled { C_DIM } else { C_OK },
+                        reset = C_RESET,
+                    );
+                }
+                if all.is_empty() {
+                    println!(
+                        "{meta}no tools registered{reset}",
+                        meta = C_META,
+                        reset = C_RESET
+                    );
+                }
+            }
+            "disable" => {
+                if name.is_empty() {
+                    println!(
+                        "{err}usage: /tools disable <name>{reset}",
+                        err = C_ERR,
+                        reset = C_RESET
+                    );
+                    return;
+                }
+                if !all.iter().any(|n| n == name) {
+                    println!(
+                        "{err}unknown tool: {name}{reset}",
+                        err = C_ERR,
+                        reset = C_RESET
+                    );
+                    return;
+                }
+                if !self.store.disabled_tools.iter().any(|d| d == name) {
+                    self.store.disabled_tools.push(name.to_string());
+                    self.save_ignore_err();
+                }
+                println!("{meta}disabled: {name}{reset}", meta = C_META, reset = C_RESET);
+            }
+            "enable" => {
+                if name.is_empty() {
+                    println!(
+                        "{err}usage: /tools enable <name>{reset}",
+                        err = C_ERR,
+                        reset = C_RESET
+                    );
+                    return;
+                }
+                let before = self.store.disabled_tools.len();
+                self.store.disabled_tools.retain(|d| d != name);
+                if self.store.disabled_tools.len() != before {
+                    self.save_ignore_err();
+                }
+                println!("{meta}enabled: {name}{reset}", meta = C_META, reset = C_RESET);
+            }
+            other => {
+                println!(
+                    "{err}unknown subcommand: /tools {other}{reset}",
+                    err = C_ERR,
+                    reset = C_RESET
+                );
+            }
         }
     }
 
@@ -690,10 +822,22 @@ impl Repl {
             return;
         }
         if args == "close" {
+            let was_open = self.vault.close();
             self.store.active_vault = None;
             self.save_ignore_err();
-            println!("{meta}vault closed (process still holds the open index — restart to fully release){reset}",
-                     meta = C_META, reset = C_RESET);
+            if was_open {
+                println!(
+                    "{meta}vault closed{reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            } else {
+                println!(
+                    "{meta}no vault to close (forgot persisted path){reset}",
+                    meta = C_META,
+                    reset = C_RESET
+                );
+            }
             return;
         }
         match self.vault.open(args) {
@@ -790,8 +934,10 @@ impl Repl {
             }
             return;
         }
-        println!("{meta}loading {args}…{reset}", meta = C_META, reset = C_RESET);
-        match self.vault.load_embed(args.to_string()).await {
+        let label = format!("loading {}", basename(args));
+        let result =
+            crate::spinner::with_spinner(label, self.vault.load_embed(args.to_string())).await;
+        match result {
             Ok(s) => println!(
                 "{meta}embed: loaded (dim={}){reset}",
                 s.dim.unwrap_or(0),
@@ -831,6 +977,7 @@ impl Repl {
                 ChatMsg {
                     role: "system".to_string(),
                     content: text,
+                    ..ChatMsg::default()
                 },
             );
         }
@@ -873,6 +1020,34 @@ fn help_row(usage: &str, description: &str) {
         }
     }
     println!("  {rendered}{pad}{description}", pad = " ".repeat(pad));
+}
+
+/// Overwrite the raw streamed assistant text with a markdown-
+/// formatted version. Counts the rows the raw text occupied, scrolls
+/// the cursor back to the top of that block, clears to end-of-screen,
+/// and writes the rendered output in place. Silently no-ops when
+/// stdout isn't a tty (piped output keeps the raw markdown — still
+/// human-readable, and avoids spewing cursor-control escapes into
+/// pipes that may not strip them).
+fn rerender_markdown(raw: &str) {
+    use std::io::Write;
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
+    let width = terminal_size::terminal_size()
+        .map(|(terminal_size::Width(w), _)| w)
+        .unwrap_or(80);
+    let rows = crate::markdown::count_rows(raw, width);
+    if rows == 0 {
+        return;
+    }
+    let formatted = crate::markdown::render(raw);
+    let mut out = anstream::stdout().lock();
+    // \x1b[<n>A moves the cursor up n rows. \r returns to col 0.
+    // \x1b[J clears from the cursor to the end of the screen.
+    let _ = write!(out, "\x1b[{rows}A\r\x1b[J");
+    let _ = out.write_all(formatted.as_bytes());
+    let _ = out.flush();
 }
 
 /// Inline-highlight every case-insensitive occurrence of `query` in

@@ -7,8 +7,10 @@
 
 mod agent;
 mod input;
+mod markdown;
 mod repl;
 mod sink;
+mod spinner;
 mod store;
 mod vault;
 
@@ -88,9 +90,14 @@ async fn run(cli: Cli) -> Result<()> {
         _ => None,
     };
     if let Some(path) = local_path.as_ref() {
-        eprintln!("loading {path}…");
-        state
-            .load(path.clone())
+        let label = format!(
+            "loading {}",
+            std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path)
+        );
+        spinner::with_spinner(label, state.load(path.clone()))
             .await
             .map_err(|e| anyhow::anyhow!("load model: {e}"))?;
     }

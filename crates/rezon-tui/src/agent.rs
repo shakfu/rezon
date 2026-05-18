@@ -13,6 +13,43 @@ use rezon_core::agent::{
     AgentOpts, ChatMessage, ConfirmationGate, Provider, ProviderOpts, ToolRegistry,
 };
 use rezon_core::llm::{resolve_cloud_config, ChatMsg, ChatOpts, LlmState};
+
+fn chat_messages_to_msgs(msgs: &[ChatMessage]) -> Vec<ChatMsg> {
+    msgs.iter()
+        .map(|m| match m {
+            ChatMessage::System { content } => ChatMsg {
+                role: "system".to_string(),
+                content: content.clone(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            },
+            ChatMessage::User { content } => ChatMsg {
+                role: "user".to_string(),
+                content: content.clone(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            },
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => ChatMsg {
+                role: "assistant".to_string(),
+                content: content.clone(),
+                tool_calls: tool_calls.clone(),
+                tool_call_id: None,
+            },
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => ChatMsg {
+                role: "tool".to_string(),
+                content: content.clone(),
+                tool_calls: Vec::new(),
+                tool_call_id: Some(tool_call_id.clone()),
+            },
+        })
+        .collect()
+}
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::sink::{TuiAgentSink, TuiConfirmationGate, UiEvent};
@@ -32,6 +69,7 @@ pub fn spawn_agent_run(
     tx: UnboundedSender<UiEvent>,
     max_steps: usize,
     vault: Option<&VaultCtx>,
+    disabled_tools: &[String],
 ) -> Result<AgentRunHandle> {
     let messages = build_agent_messages(history, user_input);
     let (provider, model) = build_provider(&state, &chat_opts)?;
@@ -45,7 +83,9 @@ pub fn spawn_agent_run(
     if let Some(v) = vault {
         register_search_notes(&mut reg, v.search.clone(), v.embed.clone());
     }
-    let registry = Arc::new(reg);
+    // User-disabled tools are stripped from the registry so the
+    // model never sees them.
+    let registry = Arc::new(reg.without(disabled_tools));
 
     let sink: Arc<dyn rezon_core::agent::EventSink> = Arc::new(TuiAgentSink::new(tx.clone()));
     let gate: Arc<dyn ConfirmationGate> =
@@ -61,13 +101,20 @@ pub fn spawn_agent_run(
         gate,
     };
 
-    let tx_err = tx.clone();
+    let tx_outer = tx.clone();
     tokio::spawn(async move {
         let mut messages = messages;
         let result = run_agent(provider, registry, sink, &mut messages, opts).await;
+        // Snapshot first — even partial / cancelled runs may have
+        // useful intermediate tool turns the user wants persisted.
+        let snapshot = chat_messages_to_msgs(&messages);
+        let _ = tx_outer.send(UiEvent::AgentHistory(snapshot));
         if let Err(e) = result {
-            let _ = tx_err.send(UiEvent::Error(e.to_string()));
+            let _ = tx_outer.send(UiEvent::Error(e.to_string()));
         }
+        // Done is the REPL's terminator; send it last so the
+        // snapshot is processed before `wait_for_turn` exits.
+        let _ = tx_outer.send(UiEvent::Done);
     });
 
     Ok(AgentRunHandle { cancel })
@@ -110,7 +157,14 @@ fn build_agent_messages(history: Vec<ChatMsg>, user_input: String) -> Vec<ChatMe
             "user" => Some(ChatMessage::User { content: m.content }),
             "assistant" => Some(ChatMessage::Assistant {
                 content: m.content,
-                tool_calls: Vec::new(),
+                // Carry persisted `tool_calls` back into the agent
+                // loop so the model sees its own prior tool
+                // selections rather than a stripped text-only turn.
+                tool_calls: m.tool_calls,
+            }),
+            "tool" => m.tool_call_id.map(|id| ChatMessage::Tool {
+                tool_call_id: id,
+                content: m.content,
             }),
             _ => None,
         })

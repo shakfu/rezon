@@ -91,6 +91,29 @@ impl SearchState {
             }
         }
     }
+
+    /// Drop a single vault's index handle: stops its file watcher,
+    /// closes its SQLite connection, and clears `active_vault` if it
+    /// pointed at the same path. Returns `true` if a handle was
+    /// actually removed.
+    pub fn close_vault(&self, vault: &str) -> bool {
+        let removed = {
+            let mut map = self.inner.lock().unwrap();
+            map.remove(vault)
+        };
+        let Some(idx) = removed else {
+            return false;
+        };
+        if let Ok(mut g) = idx.lock() {
+            g.stop_watcher();
+        }
+        if let Ok(mut a) = self.active_vault.lock() {
+            if a.as_deref() == Some(vault) {
+                *a = None;
+            }
+        }
+        true
+    }
 }
 
 pub struct VaultIndex {

@@ -34,6 +34,7 @@ impl Conversation {
             messages.push(ChatMsg {
                 role: "system".to_string(),
                 content: system.clone(),
+                ..ChatMsg::default()
             });
         }
         Self {
@@ -78,6 +79,10 @@ struct StoreFile {
     active_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_vault: Option<String>,
+    /// Names of tools the user has disabled. Applied via
+    /// `ToolRegistry::without` before each agent run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_tools: Vec<String>,
     conversations: Vec<Conversation>,
 }
 
@@ -88,6 +93,8 @@ pub struct Store {
     /// Path of the vault directory the user most recently opened.
     /// Auto-opened on next launch.
     pub active_vault: Option<String>,
+    /// User-disabled tools. Applied to every agent run's registry.
+    pub disabled_tools: Vec<String>,
 }
 
 impl Store {
@@ -111,6 +118,7 @@ impl Store {
                             conversations: file.conversations,
                             active,
                             active_vault: file.active_vault,
+                            disabled_tools: file.disabled_tools,
                         },
                         true,
                     ));
@@ -124,6 +132,7 @@ impl Store {
                 conversations: vec![convo],
                 active: 0,
                 active_vault: None,
+                disabled_tools: Vec::new(),
             },
             false,
         ))
@@ -138,6 +147,7 @@ impl Store {
             version: SCHEMA_VERSION,
             active_id: self.conversations.get(self.active).map(|c| c.id.clone()),
             active_vault: self.active_vault.clone(),
+            disabled_tools: self.disabled_tools.clone(),
             conversations: self.conversations.clone(),
         };
         let json = serde_json::to_vec_pretty(&file).context("serialize conversations")?;

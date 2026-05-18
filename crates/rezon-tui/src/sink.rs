@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rezon_core::agent::{AgentEvent, ConfirmationGate, ConfirmationOutcome, EventSink, ToolCall};
-use rezon_core::llm::{ChatSink, ChatStats};
+use rezon_core::llm::{ChatMsg, ChatSink, ChatStats};
 use serde_json::Value;
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
@@ -39,6 +39,12 @@ pub enum UiEvent {
         arguments: String,
         tx: oneshot::Sender<bool>,
     },
+    /// Final agent-loop message vector, serialised back to
+    /// `ChatMsg`. The REPL replaces the active conversation's
+    /// `messages` with this snapshot so the next agent run sees the
+    /// real assistant `tool_calls` + tool-role replies rather than
+    /// just the pretty pills shown live.
+    AgentHistory(Vec<ChatMsg>),
 }
 
 pub struct TuiChatSink {
@@ -98,7 +104,11 @@ impl EventSink for TuiAgentSink {
                 gen_tokens: s.gen_tokens,
                 duration_ms: s.duration_ms,
             }),
-            AgentEvent::Done { .. } => UiEvent::Done,
+            // The agent loop's `Done` is suppressed here — the
+            // spawn block in `agent.rs` sends `AgentHistory` then
+            // `Done` after `run_agent` returns, so the REPL gets
+            // history persisted before its terminator fires.
+            AgentEvent::Done { .. } => return,
             AgentEvent::Cancelled => UiEvent::Error("cancelled".to_string()),
             AgentEvent::Error(e) => UiEvent::Error(e),
         };

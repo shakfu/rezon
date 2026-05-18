@@ -54,6 +54,7 @@ pub const COMMANDS: &[&str] = &[
     "rename",
     "search",
     "system",
+    "tools",
     "vault",
 ];
 

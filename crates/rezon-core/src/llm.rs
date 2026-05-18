@@ -29,6 +29,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::agent::delta::{AgentDelta, FinishReason, StreamStats};
+use crate::agent::tool::ToolCall;
 
 const N_CTX: u32 = 4096;
 const MAX_NEW_TOKENS: i32 = 1024;
@@ -242,10 +243,19 @@ enum WorkerRequest {
     },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ChatMsg {
     pub role: String,
     pub content: String,
+    /// Set on assistant turns produced by the agent loop. Empty for
+    /// plain chat turns. Persisted so subsequent agent runs can show
+    /// the model its own prior tool selections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// Set on tool-role messages — the id of the assistant
+    /// `tool_calls` entry this is the result for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -405,29 +415,40 @@ pub async fn chat(
 fn to_openai_messages(
     messages: Vec<ChatMsg>,
 ) -> std::result::Result<Vec<ChatCompletionRequestMessage>, String> {
-    messages
-        .into_iter()
-        .map(|m| -> std::result::Result<ChatCompletionRequestMessage, String> {
-            match m.role.as_str() {
-                "system" => Ok(ChatCompletionRequestSystemMessageArgs::default()
+    let mut out = Vec::with_capacity(messages.len());
+    for m in messages {
+        match m.role.as_str() {
+            "system" => out.push(
+                ChatCompletionRequestSystemMessageArgs::default()
                     .content(m.content)
                     .build()
                     .map_err(|e| format!("system msg: {e}"))?
-                    .into()),
-                "user" => Ok(ChatCompletionRequestUserMessageArgs::default()
+                    .into(),
+            ),
+            "user" => out.push(
+                ChatCompletionRequestUserMessageArgs::default()
                     .content(m.content)
                     .build()
                     .map_err(|e| format!("user msg: {e}"))?
-                    .into()),
-                "assistant" => Ok(ChatCompletionRequestAssistantMessageArgs::default()
+                    .into(),
+            ),
+            "assistant" => out.push(
+                ChatCompletionRequestAssistantMessageArgs::default()
                     .content(m.content)
                     .build()
                     .map_err(|e| format!("assistant msg: {e}"))?
-                    .into()),
-                other => Err(format!("unknown role: {other}")),
-            }
-        })
-        .collect()
+                    .into(),
+            ),
+            // Tool turns only make sense paired with a `tools` array
+            // and matching tool_calls on the surrounding assistant
+            // message — neither of which the plain chat path emits.
+            // Drop them silently so a mixed chat/agent history can
+            // still be sent through the chat endpoint.
+            "tool" => continue,
+            other => return Err(format!("unknown role: {other}")),
+        }
+    }
+    Ok(out)
 }
 
 async fn run_cloud_chat(
@@ -581,6 +602,11 @@ fn run_chat_with_cache(
     let started = Instant::now();
     let chat_msgs: Vec<LlamaChatMessage> = messages
         .into_iter()
+        // `tool` turns belong to the agent path and aren't part of
+        // the local llama chat template's known roles; skip them so a
+        // mixed-mode conversation history doesn't crash the template
+        // renderer.
+        .filter(|m| m.role != "tool")
         .map(|m| {
             LlamaChatMessage::new(m.role, m.content)
                 .map_err(|e| format!("invalid chat message: {e}"))

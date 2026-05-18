@@ -93,6 +93,15 @@ impl VaultCtx {
         self.embed.status()
     }
 
+    /// Close the active vault index and stop its watcher. Returns
+    /// `true` if a vault was actually closed.
+    pub fn close(&self) -> bool {
+        let Some(vault) = self.active_vault() else {
+            return false;
+        };
+        self.search.close_vault(&vault)
+    }
+
     pub fn shutdown(&self) {
         self.embed.shutdown();
         self.search.shutdown();

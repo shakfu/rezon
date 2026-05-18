@@ -5,6 +5,123 @@ All notable changes to this project. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`rezon-tui` crate** — sequential REPL chat shell over `rezon-core`,
+  shipped as the `rezon-tui` binary. Uses plain stdin/stdout (no
+  alternate-screen takeover) so terminal scrollback / copy-paste /
+  piping all work. clap CLI mirrors the GUI's provider/model knobs:
+  `--provider {local,openai,anthropic,openrouter,other}`, `--model`,
+  `--gguf`, `--base-url`, `--api-key`, `--system`, `--agent`,
+  `--max-steps`.
+- **Slash-command surface** in `rezon-tui`: `/help`, `/exit`, `/new`,
+  `/conv [n]`, `/next`, `/prev`, `/rename`, `/delete`, `/agent`,
+  `/chat`, `/model`, `/provider`, `/max-steps`, `/system [text]`,
+  `/load <gguf>`, `/history`, `/search <query>` (full-text search
+  across all conversations, newest first, with cap), `/tools` /
+  `/tools enable|disable <name>` (runtime tool gate; persists),
+  `/clear`, `/vault [path|close]`, `/note <path>`, `/find <query>`
+  (semantic when an embed model is loaded, FTS5 otherwise),
+  `/embed [<gguf>]`.
+- **Conversation persistence**: rezon-tui stores all conversations,
+  the active conversation id, the active vault path, and disabled
+  tools as JSON under
+  `<ProjectDirs::config_dir>/conversations.json` (macOS:
+  `~/Library/Application Support/com.rezon.rezon-tui/`).
+- **rustyline line editor** with persistent history at
+  `<config_dir>/history.txt` — arrow keys, Home/End, Ctrl-A/E, Ctrl-W,
+  Ctrl-U/K, Ctrl-R reverse-search, ↑/↓ history. Tab completion for
+  slash commands and (for path-taking verbs `/load`, `/embed`,
+  `/vault`, `/note`) for filesystem paths.
+- **Streaming UX**: tokens stream straight to stdout as they arrive.
+  Cancellation via Ctrl-C during a stream (flips
+  `LlmState`/`AgentRunHandle` cancel flags); second Ctrl-C
+  force-exits. Ctrl-D on an empty line exits cleanly. Per-turn stats
+  printed in magenta after each response:
+  `[ Prompt: N tok | Generation: N tok @ N.N t/s ]`.
+- **Agent mode in the TUI**: `--agent` / `/agent`. Tool calls render
+  inline as `→ name` then `✓ name: {result}` or `✗ name: error`.
+  Tool confirmations prompt inline (`approve tool X with args …
+  [y/N] >`) and block the agent loop on a oneshot. `search_notes`
+  registers automatically when a vault is open.
+- **Agent tool turns persist for replay**: `core::llm::ChatMsg`
+  extended with optional `tool_calls` + `tool_call_id` (both
+  `#[serde(default)]`, backward-compatible with existing stores).
+  After each agent run the spawn block snapshots the full
+  `Vec<ChatMessage>` via `UiEvent::AgentHistory` and the REPL
+  replaces the conversation's messages with the structured form, so
+  subsequent agent runs (including across restarts) see the model's
+  prior tool selections + results.
+- **Vault + embeddings in the TUI**: opens via `/vault <path>`;
+  auto-opened on next launch via the persisted `active_vault`.
+  `/find` uses semantic search when an embed model is loaded, FTS5
+  otherwise. `/embed <gguf>` loads a separate embedding model;
+  catch-up loop indexes new chunks in the background.
+- **Spinner** for long-running blocking loads (`/load`, `/embed`,
+  startup `--gguf`). Braille frames at 80 ms via a tokio task;
+  cursor hidden during spin, restored on stop; suppressed on
+  non-tty.
+- **Cross-platform color**: `anstyle` for style values, `anstream`
+  for output. SGR codes stripped automatically when stdout isn't a
+  tty (`rezon-tui --help | cat`); translated to Win32 console API
+  calls on legacy Windows; `NO_COLOR` honored.
+- **Makefile targets**: `build-tui`, `build-tui-release`,
+  `run-tui ARGS="…"`, `run-tui-release ARGS="…"`.
+
+### Changed
+- **Workspace refactor.** Rust code split into a 3-crate Cargo
+  workspace under `crates/`:
+  - `rezon-core` — provider-agnostic backend: chat (local llama.cpp +
+    OpenAI-compatible cloud via `async-openai`), agent loop, tools
+    (including `search_notes`), vault file ops, FTS5 + sqlite-vec
+    search index, embedding worker + background catch-up loop.
+    Zero Tauri references.
+  - `rezon-web` — thin Tauri shell wrapping `rezon-core` via
+    `TauriChatSink`, `TauriEventSink`, `TauriConfirmationGate`,
+    `#[tauri::command]` wrappers, and config-dir resolution. The
+    frontend (`src/`) is untouched; all command names and event
+    names preserved.
+  - `rezon-tui` — terminal REPL described above.
+- `src-tauri/` moved to `crates/rezon-web/`. `tauri.conf.json` got
+  `frontendDist: "../../dist"`. The `make dev` / `make build`
+  targets pass `--config $(TAURI_CONF)` so Tauri finds the
+  relocated config; everything else (frontend, dev server, etc.)
+  is unchanged.
+- `LlmState`, `SearchState`, `EmbedState` are now registered as
+  `Arc<T>` in Tauri's managed state so they can be shared between
+  the chat command and the agent loop without copies.
+- `ChatSink` trait introduced in `rezon-core::llm` to replace the
+  previous direct `app.emit("chat-token"|"chat-stats"|"chat-done", …)`
+  calls. `TauriChatSink` (in `rezon-web`) preserves the exact event
+  names and payloads.
+- `SearchState` now takes its data directory at construction
+  (`SearchState::new(data_dir)`); the previous `Default` impl
+  required an `AppHandle` to resolve `app_data_dir`. `rezon-web`
+  builds it inside `.setup()` after the handle is available.
+- `EmbedState::load` no longer emits Tauri events directly; the
+  shell wrapper (`web::embed::do_load_embed`) emits
+  `embed-loading` / `embed-loaded` / `embed-load-error` around the
+  core call. `core::embed::ensure_catchup_started` takes
+  `Arc<EmbedState>` + `Arc<SearchState>` instead of `AppHandle`.
+- `core::llm::to_openai_messages` now skips `tool`-role messages
+  (previously errored on unknown role) so a mixed agent/chat
+  conversation history flows through the cloud chat endpoint
+  cleanly. Same filter on the local chat path.
+- `core::agent::tool::ToolContext` lost its
+  `app: Option<AppHandle>` field. `agent::tools::search_notes`
+  receives `Arc<SearchState>` + `Arc<EmbedState>` at construction
+  (`register_search_notes(&mut reg, search, embed)`) instead of
+  reaching for them through Tauri state.
+- `SearchState::close_vault(path)` added in core so the TUI's
+  `/vault close` actually drops the per-vault index + stops its
+  file watcher (the GUI doesn't yet surface this).
+
+### Fixed
+- `make dev` / `make build` continue to work after the workspace
+  refactor via the `--config $(TAURI_CONF)` flag passed to the
+  Tauri CLI.
+
+## [Older entries]
+
 ### Changed
 - Migrated all headless-component usage from Radix
   (`@radix-ui/react-dialog`, `@radix-ui/react-alert-dialog`,

@@ -84,7 +84,7 @@ pub enum ToolError {
 /// into the conversation). `arguments` is the raw JSON string the
 /// model emitted; tools parse it themselves so they can produce good
 /// argument-error messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
