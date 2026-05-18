@@ -56,7 +56,7 @@ pub fn read_last_model(app: &AppHandle) -> Option<String> {
 
 pub async fn do_load(app: &AppHandle, path: String) -> Result<ModelStatus, String> {
     let _ = app.emit("model-loading", &path);
-    let state = app.state::<LlmState>();
+    let state = app.state::<Arc<LlmState>>();
     let status = state.load(path.clone()).await?;
     persist_last_model(app, &path);
     let _ = app.emit("model-loaded", &status);
@@ -75,24 +75,24 @@ pub async fn load_model(app: AppHandle, path: String) -> Result<ModelStatus, Str
 }
 
 #[tauri::command]
-pub fn model_status(state: State<'_, LlmState>) -> Result<ModelStatus, String> {
+pub fn model_status(state: State<'_, Arc<LlmState>>) -> Result<ModelStatus, String> {
     Ok(state.status())
 }
 
 #[tauri::command]
-pub fn cancel_chat(state: State<'_, LlmState>) {
+pub fn cancel_chat(state: State<'_, Arc<LlmState>>) {
     state.cancel();
 }
 
 #[tauri::command]
 pub async fn chat(
     app: AppHandle,
-    state: State<'_, LlmState>,
+    state: State<'_, Arc<LlmState>>,
     messages: Vec<ChatMsg>,
     opts: ChatOpts,
 ) -> Result<String, String> {
     let sink: Arc<dyn ChatSink> = Arc::new(TauriChatSink::new(app));
-    llm::chat(state.inner(), messages, opts, sink).await
+    llm::chat(state.inner().as_ref(), messages, opts, sink).await
 }
 
 #[derive(Debug, Clone, Serialize)]

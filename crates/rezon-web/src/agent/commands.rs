@@ -8,15 +8,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::oneshot;
 
 use crate::agent::{
     cloud::CloudProvider, confirm::ConfirmationGate, local::LocalProvider, loop_::AgentOutcome,
-    run_agent, tauri_gate::TauriConfirmationGate, tauri_sink::TauriEventSink,
-    tools::default_registry, AgentOpts, ChatMessage, Provider, ProviderOpts,
+    run_agent, tauri_gate::TauriConfirmationGate, tauri_sink::TauriEventSink, AgentOpts,
+    ChatMessage, Provider, ProviderOpts, ToolRegistry,
 };
+use rezon_core::agent::tools::{register_core_tools, register_search_notes};
+use rezon_core::embed::EmbedState;
 use rezon_core::llm;
+use rezon_core::search::SearchState;
 
 /// Tracks the cancel flag for the in-flight agent run, if any, plus
 /// the table of pending tool-confirmation oneshots. One active run at
@@ -104,11 +107,19 @@ pub struct ToolInfo {
 }
 
 /// Snapshot of registered tools. Used by the Settings UI to render
-/// the per-tool permission list.
+/// the per-tool permission list. We build a transient registry with
+/// dummy state Arcs since the catalog only inspects each tool's
+/// schema fields (name/description/requires_confirmation), never
+/// dispatches.
 #[tauri::command]
-pub fn tools_catalog() -> Vec<ToolInfo> {
-    default_registry()
-        .tools()
+pub fn tools_catalog(
+    search: State<'_, Arc<SearchState>>,
+    embed: State<'_, Arc<EmbedState>>,
+) -> Vec<ToolInfo> {
+    let mut reg = ToolRegistry::new();
+    register_core_tools(&mut reg);
+    register_search_notes(&mut reg, search.inner().clone(), embed.inner().clone());
+    reg.tools()
         .map(|t| ToolInfo {
             name: t.name().to_string(),
             description: t.description().to_string(),
@@ -131,7 +142,8 @@ pub async fn agent_chat(
         // a synthetic label for stats rather than rejecting a missing
         // model field.
         let label = opts.model.clone().unwrap_or_else(|| "local".to_string());
-        (Arc::new(LocalProvider::new(app.clone())), label)
+        let llm_state = app.state::<Arc<llm::LlmState>>().inner().clone();
+        (Arc::new(LocalProvider::new(llm_state)), label)
     } else {
         let (api_key, base_url, model) = resolve_cloud_config(&opts)?;
         let label = opts.provider.clone();
@@ -149,7 +161,14 @@ pub async fn agent_chat(
         .filter(|(_, v)| v.as_str() == "disable")
         .map(|(k, _)| k.clone())
         .collect();
-    let registry = Arc::new(default_registry().without(&disabled));
+    let registry = {
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        let search = app.state::<Arc<SearchState>>().inner().clone();
+        let embed = app.state::<Arc<EmbedState>>().inner().clone();
+        register_search_notes(&mut reg, search, embed);
+        Arc::new(reg.without(&disabled))
+    };
     let sink = Arc::new(TauriEventSink::new(app.clone()));
 
     // Replace any existing cancel slot with a fresh flag for this run.
@@ -175,7 +194,6 @@ pub async fn agent_chat(
         },
         max_steps: opts.max_steps.unwrap_or(8),
         gate,
-        tool_state: Some(Arc::new(app.clone())),
     };
 
     let mut messages = messages;

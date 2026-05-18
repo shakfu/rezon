@@ -19,10 +19,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(llm::LlmState::default())
+        .manage(std::sync::Arc::new(llm::LlmState::default()))
         .manage(agent::commands::AgentState::default())
-        .manage(search::SearchState::default())
-        .manage(embed::EmbedState::default())
+        .manage(std::sync::Arc::new(embed::EmbedState::default()))
         .invoke_handler(tauri::generate_handler![
             llm::load_model,
             llm::model_status,
@@ -99,6 +98,13 @@ pub fn run() {
                 }
             });
 
+            // ---- Search state (data_dir resolved here, not at builder time) ----
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("app_data_dir: {e}"))?;
+            app.manage(std::sync::Arc::new(search::SearchState::new(data_dir)));
+
             // ---- Auto-load last models ----
             let handle = app.handle().clone();
             if let Some(path) = llm::read_last_model(&handle) {
@@ -130,9 +136,9 @@ pub fn run() {
             // local model state, so the agent loop's stream consumer
             // exits promptly.
             handle.state::<agent::commands::AgentState>().shutdown();
-            handle.state::<llm::LlmState>().shutdown();
-            handle.state::<embed::EmbedState>().shutdown();
-            handle.state::<search::SearchState>().shutdown();
+            handle.state::<std::sync::Arc<llm::LlmState>>().shutdown();
+            handle.state::<std::sync::Arc<embed::EmbedState>>().shutdown();
+            handle.state::<std::sync::Arc<search::SearchState>>().shutdown();
         }
     });
 }

@@ -13,7 +13,6 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
 
 use crate::agent::delta::AgentDelta;
 use crate::agent::message::ChatMessage;
@@ -22,12 +21,12 @@ use crate::agent::tool::ToolCall;
 use crate::llm::LlmState;
 
 pub struct LocalProvider {
-    app: AppHandle,
+    state: Arc<LlmState>,
 }
 
 impl LocalProvider {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(state: Arc<LlmState>) -> Self {
+        Self { state }
     }
 }
 
@@ -44,8 +43,8 @@ impl Provider for LocalProvider {
         let tools_json =
             serde_json::to_string(&tools).context("serialize tools")?;
 
-        let state = self.app.state::<LlmState>();
-        let rx = state
+        let rx = self
+            .state
             .agent_chat_stream(messages_json, tools_json, opts.cancel.clone())
             .map_err(|e| anyhow!(e))?;
 

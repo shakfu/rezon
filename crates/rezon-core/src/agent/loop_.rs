@@ -33,9 +33,6 @@ pub struct AgentOpts {
     /// `AutoApproveGate` makes the loop behave as before; production
     /// rezon passes a `TauriConfirmationGate` that prompts the user.
     pub gate: Arc<dyn ConfirmationGate>,
-    /// Opaque shell-provided state forwarded to every `ToolContext`.
-    /// See `ToolContext::state`.
-    pub tool_state: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 #[derive(Debug)]
@@ -180,7 +177,7 @@ pub async fn run_agent(
                 name: call.name.clone(),
             });
 
-            let result = dispatch_one(&registry, call, &cancel, opts.tool_state.clone()).await;
+            let result = dispatch_one(&registry, call, &cancel).await;
             match &result {
                 Ok(value) => sink.emit(AgentEvent::ToolEnd {
                     id: call.id.clone(),
@@ -221,7 +218,6 @@ async fn dispatch_one(
     registry: &ToolRegistry,
     call: &ToolCall,
     cancel: &Arc<AtomicBool>,
-    tool_state: Option<Arc<dyn std::any::Any + Send + Sync>>,
 ) -> Result<Value, ToolError> {
     let tool = registry
         .get(&call.name)
@@ -249,7 +245,6 @@ async fn dispatch_one(
     let ctx = ToolContext {
         cancel: cancel.clone(),
         workdir: None,
-        state: tool_state,
     };
     dispatch_tool(tool.as_ref(), args, &ctx).await
 }

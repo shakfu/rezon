@@ -1,21 +1,16 @@
-// Agent module shim: pure types/loop/cloud-provider live in
-// `rezon_core::agent`. This file re-exports them so existing
-// `crate::agent::...` paths keep resolving, and declares the
-// Tauri-specific pieces that still live in rezon-web (commands,
-// LocalProvider, TauriEventSink, TauriConfirmationGate, tools/).
-//
-// Subsequent phases (P3, P4) will move local + tools into core and
-// shrink this list further.
+// Agent module shim. All providers, the loop, the built-in tools
+// (including `search_notes`) live in `rezon_core::agent`. This crate
+// adds only the Tauri-specific pieces: the command surface, an
+// `EventSink` that forwards to `app.emit`, and a `ConfirmationGate`
+// that prompts the frontend.
 
 pub mod commands;
-pub mod local;
 pub mod tauri_gate;
 pub mod tauri_sink;
-pub mod tools;
 
 pub use rezon_core::agent::{
-    cloud, confirm, delta, event, loop_, message, provider, tool, AgentDelta, AgentEvent,
-    AgentOpts, AgentOutcome, ChatMessage, EventSink, FinishReason, LogEventSink, Provider,
-    ProviderOpts, StreamStats, Tool, ToolCall, ToolContext, ToolError, ToolRegistry, ToolResult,
-    run_agent,
+    cloud, confirm, delta, event, local, loop_, message, provider, tool, tools, AgentDelta,
+    AgentEvent, AgentOpts, AgentOutcome, ChatMessage, EventSink, FinishReason, LocalProvider,
+    LogEventSink, Provider, ProviderOpts, StreamStats, Tool, ToolCall, ToolContext, ToolError,
+    ToolRegistry, ToolResult, run_agent,
 };

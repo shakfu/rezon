@@ -9,16 +9,26 @@
 // keeps the tool's parameter surface minimal — the model only needs
 // to pick a query string, not the user's directory layout.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
 
 use crate::agent::tool::{Tool, ToolContext, ToolError};
-use crate::embed::semantic_query;
+use crate::embed::{semantic_query, EmbedState};
 use crate::search::{vault_search_impl, SearchState};
 
-pub struct SearchNotes;
+pub struct SearchNotes {
+    search: Arc<SearchState>,
+    embed: Arc<EmbedState>,
+}
+
+impl SearchNotes {
+    pub fn new(search: Arc<SearchState>, embed: Arc<EmbedState>) -> Self {
+        Self { search, embed }
+    }
+}
 
 #[async_trait]
 impl Tool for SearchNotes {
@@ -59,7 +69,7 @@ impl Tool for SearchNotes {
         false
     }
 
-    async fn dispatch(&self, args: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+    async fn dispatch(&self, args: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
             query: String,
@@ -73,24 +83,14 @@ impl Tool for SearchNotes {
         }
         let limit = args.limit.unwrap_or(8).clamp(1, 50) as usize;
 
-        let app = ctx
-            .state
-            .as_ref()
-            .and_then(|s| s.downcast_ref::<AppHandle>())
-            .cloned()
-            .ok_or_else(|| ToolError::Argument("no app handle available".into()))?;
-
-        let vault = app
-            .state::<SearchState>()
-            .active_vault()
-            .ok_or_else(|| {
-                ToolError::Argument(
-                    "no vault is open — ask the user to open a vault in the Notes tab".into(),
-                )
-            })?;
+        let vault = self.search.active_vault().ok_or_else(|| {
+            ToolError::Argument(
+                "no vault is open — ask the user to open a vault in the Notes tab".into(),
+            )
+        })?;
 
         // Try semantic first.
-        let semantic = semantic_query(&app, &vault, &query, limit)
+        let semantic = semantic_query(&self.embed, &self.search, &vault, &query, limit)
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!(e)))?;
         if !semantic.is_empty() {
             let results: Vec<_> = semantic
@@ -105,7 +105,7 @@ impl Tool for SearchNotes {
         }
 
         // Fall back to FTS5.
-        let fts = vault_search_impl(&app, &vault, &query, limit)
+        let fts = vault_search_impl(&self.search, &vault, &query, limit)
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!(e)))?;
         let results: Vec<_> = fts
             .into_iter()

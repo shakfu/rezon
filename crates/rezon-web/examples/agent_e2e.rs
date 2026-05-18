@@ -16,8 +16,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 
 use rezon_lib::agent::{
-    cloud::CloudProvider, confirm::AutoApproveGate, run_agent, tools::default_registry, AgentOpts,
-    ChatMessage, LogEventSink, Provider, ProviderOpts,
+    cloud::CloudProvider, confirm::AutoApproveGate, run_agent, tools::register_core_tools,
+    AgentOpts, ChatMessage, LogEventSink, Provider, ProviderOpts, ToolRegistry,
 };
 
 const SYSTEM_PROMPT: &str = "You are a careful assistant with access to tools. \
@@ -43,7 +43,11 @@ async fn run(prompt: String) -> Result<()> {
         "https://openrouter.ai/api/v1",
         "openrouter",
     ));
-    let registry = Arc::new(default_registry());
+    let registry = {
+        let mut reg = ToolRegistry::new();
+        register_core_tools(&mut reg);
+        Arc::new(reg)
+    };
     let sink = Arc::new(LogEventSink);
 
     println!("=== registered tools ===");
@@ -65,7 +69,6 @@ async fn run(prompt: String) -> Result<()> {
         },
         max_steps: 6,
         gate: Arc::new(AutoApproveGate),
-        tool_state: None,
     };
 
     let outcome = run_agent(provider, registry, sink, &mut messages, opts).await?;

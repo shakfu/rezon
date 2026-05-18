@@ -6,7 +6,6 @@
 //   - async-openai's `tools` field
 //   - llama-cpp-2's `apply_chat_template_with_tools_oaicompat`
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -56,11 +55,6 @@ pub struct ToolContext {
     pub cancel: Arc<AtomicBool>,
     /// Optional working directory the agent run is rooted in.
     pub workdir: Option<PathBuf>,
-    /// Opaque shell-provided state. Tools that depend on
-    /// shell-specific handles (e.g. Tauri's `AppHandle`) downcast
-    /// this. Core keeps no opinion on what's inside. Retired in P5
-    /// once search/embed move to core behind explicit traits.
-    pub state: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 /// Reasons a tool dispatch can fail. The agent loop maps each variant
