@@ -7,6 +7,7 @@
 
 pub mod current_time;
 pub mod file_read;
+pub mod read_note;
 pub mod search_notes;
 pub mod shell_exec;
 pub mod web_fetch;
@@ -33,7 +34,15 @@ pub fn register_search_notes(
     search: Arc<SearchState>,
     embed: Arc<EmbedState>,
 ) {
-    reg.register(Arc::new(search_notes::SearchNotes::new(search, embed)));
+    reg.register(Arc::new(search_notes::SearchNotes::new(
+        search.clone(),
+        embed,
+    )));
+    // `read_note` ships alongside `search_notes` — both are
+    // read-only and both need a live `SearchState::active_vault`.
+    // Registering them as a pair keeps the agent's read story
+    // coherent: search to find, read to fetch.
+    reg.register(Arc::new(read_note::ReadNote::new(search)));
 }
 
 /// Register the vault-write tools (`write_note`, `append_note`,

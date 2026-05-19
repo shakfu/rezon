@@ -49,11 +49,11 @@ const SKIP_GIT_SENTINEL: &str = ".rezon-skip-git";
 /// `set_gc_policy` if you need a different ceiling.
 const DEFAULT_MAX_ENTRIES: usize = 500;
 
-/// Logical operation kind. `Write` covers create + overwrite + append
-/// + edit (the journal doesn't care which, since the before/after
+/// Logical operation kind. `Write` covers all create/overwrite/
+/// append/edit cases (the journal doesn't distinguish — before/after
 /// snapshots fully describe the change). `Undo` references the
-/// `target_id` of the entry it reverses, so `undone_ids` is
-/// recoverable by scanning the log.
+/// `target_id` of the entry it reverses, so the set of "undone" ids
+/// is recoverable by scanning the log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {

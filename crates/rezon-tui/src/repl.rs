@@ -2274,11 +2274,10 @@ async fn prompt_yes_no(name: &str, arguments: &str, preview: Option<&str>) -> bo
     matches!(resp.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// Apply ANSI colour to a preview returned by `Tool::preview`.
-///   * `+ ` → green
-///   * `- ` → red
-///   * everything else → default fg
-/// Strictly line-oriented; doesn't try to render intra-line diffs.
+/// Apply ANSI colour to a preview returned by `Tool::preview`. `+ `
+/// lines become green, `- ` lines red, everything else stays in
+/// default fg. Strictly line-oriented; doesn't try to render
+/// intra-line diffs.
 fn colorize_diff(preview: &str) -> String {
     let mut out = String::with_capacity(preview.len() + 64);
     for (i, line) in preview.lines().enumerate() {

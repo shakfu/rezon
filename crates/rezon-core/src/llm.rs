@@ -674,11 +674,12 @@ fn run_chat_with_cache(
     while i < to_add.len() {
         let end = (i + chunk_cap).min(to_add.len());
         batch.clear();
-        for j in i..end {
-            let pos = common as i32 + j as i32;
-            let is_last = j == last_idx;
+        for (j, tok) in to_add[i..end].iter().enumerate() {
+            let abs_j = i + j;
+            let pos = common as i32 + abs_j as i32;
+            let is_last = abs_j == last_idx;
             batch
-                .add(to_add[j], pos, &[0], is_last)
+                .add(*tok, pos, &[0], is_last)
                 .map_err(|e| format!("batch.add prompt: {e}"))?;
         }
         ctx.decode(&mut batch)
@@ -833,11 +834,12 @@ fn run_agent_with_cache(
     while i < to_add.len() {
         let end = (i + chunk_cap).min(to_add.len());
         batch.clear();
-        for j in i..end {
-            let pos = common as i32 + j as i32;
-            let is_last = j == last_idx;
+        for (j, tok) in to_add[i..end].iter().enumerate() {
+            let abs_j = i + j;
+            let pos = common as i32 + abs_j as i32;
+            let is_last = abs_j == last_idx;
             batch
-                .add(to_add[j], pos, &[0], is_last)
+                .add(*tok, pos, &[0], is_last)
                 .map_err(|e| format!("batch.add prompt: {e}"))?;
         }
         ctx.decode(&mut batch)

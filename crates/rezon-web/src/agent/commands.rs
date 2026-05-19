@@ -297,10 +297,8 @@ fn resolve_cloud_config(opts: &AgentChatOpts) -> Result<(String, String, String)
 /// through untouched so the LLM provider's prompt cache stays valid.
 /// Unresolved markers surface via a `chat-warning` event.
 fn expand_agent_messages(vault: &str, msgs: &mut [ChatMessage], app: &AppHandle) {
-    if let Some(first) = msgs.first_mut() {
-        if let ChatMessage::System { content } = first {
-            *content = apply_expand(vault, content, app);
-        }
+    if let Some(ChatMessage::System { content }) = msgs.first_mut() {
+        *content = apply_expand(vault, content, app);
     }
     for msg in msgs.iter_mut().rev() {
         if let ChatMessage::User { content } = msg {

@@ -2,13 +2,12 @@
 // an EventSink, and an initial message vector; runs until either the
 // model returns a final answer, the user cancels, or max_steps is hit.
 //
-// Phase 2 caveats:
-//   - Confirmation flow is stubbed: tools that report
-//     `requires_confirmation = true` are still dispatched in this
-//     phase, with a one-line warning. Phase 5 wires the real confirm
-//     UX.
-//   - Single conversation, no persistence yet. The caller is
-//     responsible for storing the message vector if it cares.
+// Tool dispatch is gated by `AgentOpts::gate`: every tool call passes
+// through `gate.ask(call, preview)` before the loop emits `ToolStart`.
+// Denied calls still produce a tool-result message (with an
+// `"error": "denied by user"` body) so the model can react on the
+// next turn. The caller owns persistence — the loop only mutates the
+// `messages` vector in place.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -233,16 +232,6 @@ async fn dispatch_one(
         .get(&call.name)
         .ok_or_else(|| ToolError::Argument(format!("unknown tool `{}`", call.name)))?
         .clone();
-
-    if tool.requires_confirmation() {
-        // Phase-2 stub: we don't have the confirm flow yet. Log and
-        // dispatch anyway. Phase 5 will replace this with a blocking
-        // confirmation request emitted as an `AgentEvent::ToolConfirm`.
-        eprintln!(
-            "warn: tool `{}` requires confirmation; phase-2 dispatches without prompting",
-            tool.name()
-        );
-    }
 
     let args: Value = if call.arguments.trim().is_empty() {
         Value::Object(Default::default())

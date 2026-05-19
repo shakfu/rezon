@@ -50,10 +50,7 @@ pub fn vault_write(
     // auto-commit) now surface via a `vault-warning` Tauri event
     // so the UI can show a toast. The write itself already
     // succeeded — this is a notice, not an error.
-    let rel = path
-        .strip_prefix(&vault)
-        .map(|s| s.trim_start_matches('/').to_string())
-        .unwrap_or_else(|| path.clone());
+    let rel = relativize(&vault, &path);
     match journal::record_write(&vault, "manual_edit", &rel, before.as_deref(), Some(&after_bytes)) {
         Ok(out) => {
             if let Some(w) = out.git_warning {
@@ -124,23 +121,150 @@ pub struct UndoReport {
 }
 
 #[tauri::command]
-pub fn vault_create(vault: String, path: String) -> Result<(), String> {
-    vault::vault_create(vault, path)
+pub fn vault_create(app: AppHandle, vault: String, path: String) -> Result<(), String> {
+    vault::vault_create(vault.clone(), path.clone())?;
+    let rel = relativize(&vault, &path);
+    // `vault_create` writes an empty file; record the creation so
+    // `/undo` can delete it. before=None signals the file didn't
+    // exist; after=Some(b"") preserves blob-deduped empty content.
+    match journal::record_write(&vault, "vault_create", &rel, None, Some(b"")) {
+        Ok(out) => {
+            if let Some(w) = out.git_warning {
+                let _ = app.emit("vault-warning", format!("git: {w}"));
+            }
+        }
+        Err(e) => {
+            let _ = app.emit("vault-warning", format!("journal: {e}"));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn vault_mkdir(vault: String, path: String) -> Result<(), String> {
+    // Directory ops are not journaled — the journal is file-oriented
+    // (blobs keyed by content sha) and an empty directory has no
+    // content. The directory will surface in the journal as soon as
+    // a file is created inside it.
     vault::vault_mkdir(vault, path)
 }
 
 #[tauri::command]
-pub fn vault_delete(vault: String, path: String) -> Result<(), String> {
-    vault::vault_delete(vault, path)
+pub fn vault_delete(app: AppHandle, vault: String, path: String) -> Result<(), String> {
+    let abs = Path::new(&path);
+    let was_dir = abs.is_dir();
+    // For files, snapshot the pre-image so undo can restore. For
+    // directories, walk and snapshot every contained file before the
+    // recursive delete fires. Both paths land as `Op::Write` entries
+    // with `after=None`, so `/undo` walks them back one at a time
+    // (deepest-last so re-creating directories happens before files
+    // land inside them).
+    let snapshots: Vec<(String, Vec<u8>)> = if was_dir {
+        snapshot_dir(&vault, abs)?
+    } else if abs.exists() {
+        let bytes = std::fs::read(abs).map_err(|e| format!("read pre-image {path}: {e}"))?;
+        vec![(relativize(&vault, &path), bytes)]
+    } else {
+        return Err(format!("not found: {path}"));
+    };
+    vault::vault_delete(vault.clone(), path.clone())?;
+    for (rel, before) in snapshots {
+        match journal::record_write(&vault, "vault_delete", &rel, Some(&before), None) {
+            Ok(out) => {
+                if let Some(w) = out.git_warning {
+                    let _ = app.emit("vault-warning", format!("git: {w}"));
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("vault-warning", format!("journal: {e}"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn vault_rename(vault: String, from: String, to: String) -> Result<(), String> {
-    vault::vault_rename(vault, from, to)
+pub fn vault_rename(
+    app: AppHandle,
+    vault: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    let from_abs = Path::new(&from);
+    if !from_abs.exists() {
+        return Err(format!("not found: {from}"));
+    }
+    // Capture pre-image of the source so the rename surfaces as
+    // delete-from + create-at in the journal. Two `/undo`s reverse
+    // the rename (first re-deletes the new file, second restores
+    // the old). Directories: skip journaling (see note in
+    // vault_mkdir); the move still goes through.
+    let bytes_opt: Option<Vec<u8>> = if from_abs.is_file() {
+        Some(std::fs::read(from_abs).map_err(|e| format!("read pre-image {from}: {e}"))?)
+    } else {
+        None
+    };
+    vault::vault_rename(vault.clone(), from.clone(), to.clone())?;
+    if let Some(bytes) = bytes_opt {
+        let rel_from = relativize(&vault, &from);
+        let rel_to = relativize(&vault, &to);
+        // Order: delete-from first, then create-at-to. `last_undoable`
+        // walks back from the tail, so the first undo reverses the
+        // "create at to" half (i.e. deletes the new file), and the
+        // second undo restores the source.
+        let _ = journal::record_write(&vault, "vault_rename", &rel_from, Some(&bytes), None);
+        match journal::record_write(&vault, "vault_rename", &rel_to, None, Some(&bytes)) {
+            Ok(out) => {
+                if let Some(w) = out.git_warning {
+                    let _ = app.emit("vault-warning", format!("git: {w}"));
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("vault-warning", format!("journal: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Vault-relative path: strip the vault root and any leading `/`.
+/// Falls back to the absolute path when the strip fails (e.g. the
+/// caller passed a path outside the vault — which the core layer's
+/// `within` check should already reject before we get here, but
+/// belt-and-suspenders).
+fn relativize(vault: &str, abs: &str) -> String {
+    abs.strip_prefix(vault)
+        .map(|s| s.trim_start_matches('/').to_string())
+        .unwrap_or_else(|| abs.to_string())
+}
+
+/// Walk `dir` recursively and return `(relative_path, content_bytes)`
+/// for every regular file found. Used by `vault_delete` to snapshot
+/// a directory tree before `remove_dir_all` wipes it. Hidden files
+/// (`.gitignore`, `.rezon-history/...`) are included so a directory
+/// undo restores the exact prior state.
+fn snapshot_dir(vault: &str, dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut out = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let reader = std::fs::read_dir(&d)
+            .map_err(|e| format!("read_dir {:?}: {e}", d))?;
+        for entry in reader.flatten() {
+            let p = entry.path();
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                stack.push(p);
+            } else if ft.is_file() {
+                let bytes = std::fs::read(&p)
+                    .map_err(|e| format!("read {:?}: {e}", p))?;
+                out.push((relativize(vault, &p.to_string_lossy()), bytes));
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[tauri::command]

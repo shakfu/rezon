@@ -46,8 +46,9 @@ fmt-check: ## Verify Rust formatting (workspace)
 lint: ## Clippy with warnings as errors (workspace)
 	@cargo clippy --workspace --all-targets -- -D warnings
 
-test: ## Run Rust tests (workspace)
+test: ## Run Rust tests + clippy (workspace, warnings = errors)
 	@cargo test --workspace
+	@cargo clippy --workspace --all-targets -- -D warnings
 
 clean: ## Remove build artifacts
 	@rm -rf node_modules dist target crates/rezon-web/target
