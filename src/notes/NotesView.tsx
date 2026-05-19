@@ -25,6 +25,7 @@ import {
   search as searchVault,
   searchSemantic,
   stripMdExt,
+  vaultRedo,
   vaultUndo,
   writeFile,
   type EmbedStatus,
@@ -32,6 +33,7 @@ import {
   type SearchHit,
 } from "./vault";
 import { FileTree, type CtxTarget } from "./FileTree";
+import { JournalPanel } from "./JournalPanel";
 import { MilkdownEditor } from "./MilkdownEditor";
 
 type TabState = {
@@ -54,6 +56,9 @@ export function NotesView() {
   // Surfaced as a transient toast at the bottom of the editor pane;
   // clicking ✕ or the next event dismisses the prior one.
   const [vaultWarning, setVaultWarning] = useState<string | null>(null);
+  // Vault edit history modal. Lazy-loaded on open; entries are
+  // refreshed each open so the panel never goes stale.
+  const [journalOpen, setJournalOpen] = useState(false);
   // Inline prompt state. `window.prompt` does not work in Tauri's
   // webview, so we render a small input bar at the top of the sidebar
   // instead. `kind` tells the submit handler what to create / do.
@@ -238,28 +243,14 @@ export function NotesView() {
     [tabs, activePath, vault],
   );
 
-  const onUndo = useCallback(async () => {
-    if (!vault) return;
-    // Flush any in-flight debounced save first so the journal entry
-    // we're about to revert reflects the user's *visible* state,
-    // not a stale on-disk snapshot the editor has already moved
-    // past. Wait for all flushes to land before invoking undo.
-    const pending: Promise<unknown>[] = [];
-    for (const [path, timer] of saveTimers.current) {
-      clearTimeout(timer);
-      saveTimers.current.delete(path);
-      const t = tabs.find((x) => x.path === path);
-      if (t && t.liveContent !== t.diskContent) {
-        pending.push(writeFile(vault, path, t.liveContent).catch(() => {}));
-      }
-    }
-    if (pending.length > 0) await Promise.all(pending);
-    try {
-      const report = await vaultUndo(vault);
-      // The file on disk was just replaced (or removed). Refresh
-      // any open tab pointing at the reverted path so the editor
-      // doesn't overwrite our work on its next debounced save.
-      const relPath = report.path;
+  // Shared "the file at `relPath` may have changed on disk behind
+  // our back" handler. Reused by undo, redo, and the journal-panel
+  // revert button. Flushes pending debounced saves first so we
+  // don't race against our own queue; then re-syncs any open tab,
+  // closing it if the file vanished.
+  const refreshFromDisk = useCallback(
+    async (relPath: string) => {
+      if (!vault) return;
       const exists = tabs.some((t) => t.path === relPath);
       if (exists) {
         try {
@@ -272,18 +263,50 @@ export function NotesView() {
             ),
           );
         } catch {
-          // File was deleted by the undo (target was a creation).
-          // Close the tab silently.
           setTabs((prev) => prev.filter((t) => t.path !== relPath));
           setActivePath((cur) => (cur === relPath ? null : cur));
         }
       }
-      // Tree refresh picks up creates/deletes from the revert.
       await refreshTree(vault);
+    },
+    [vault, tabs, refreshTree],
+  );
+
+  const flushPendingSaves = useCallback(async () => {
+    if (!vault) return;
+    const pending: Promise<unknown>[] = [];
+    for (const [path, timer] of saveTimers.current) {
+      clearTimeout(timer);
+      saveTimers.current.delete(path);
+      const t = tabs.find((x) => x.path === path);
+      if (t && t.liveContent !== t.diskContent) {
+        pending.push(writeFile(vault, path, t.liveContent).catch(() => {}));
+      }
+    }
+    if (pending.length > 0) await Promise.all(pending);
+  }, [vault, tabs]);
+
+  const onUndo = useCallback(async () => {
+    if (!vault) return;
+    await flushPendingSaves();
+    try {
+      const report = await vaultUndo(vault);
+      await refreshFromDisk(report.path);
     } catch (e) {
       setError(String(e));
     }
-  }, [vault, tabs, refreshTree]);
+  }, [vault, flushPendingSaves, refreshFromDisk]);
+
+  const onRedo = useCallback(async () => {
+    if (!vault) return;
+    await flushPendingSaves();
+    try {
+      const report = await vaultRedo(vault);
+      await refreshFromDisk(report.path);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [vault, flushPendingSaves, refreshFromDisk]);
 
   const onEditorChange = useCallback(
     (path: string, markdown: string) => {
@@ -788,6 +811,24 @@ export function NotesView() {
           >
             ↶ Undo
           </button>
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer rounded-md border border-border-soft bg-transparent px-2 py-0.5 text-[12px] text-fg-dim hover:bg-bg hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onRedo}
+            disabled={!vault}
+            title="Reapply the most recent vault undo"
+          >
+            ↷ Redo
+          </button>
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer rounded-md border border-border-soft bg-transparent px-2 py-0.5 text-[12px] text-fg-dim hover:bg-bg hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => setJournalOpen(true)}
+            disabled={!vault}
+            title="Show recent vault edits"
+          >
+            History
+          </button>
         </div>
 
         {error && (
@@ -890,6 +931,11 @@ export function NotesView() {
           </div>
         </div>
       )}
+      <JournalPanel
+        vault={vault}
+        open={journalOpen}
+        onClose={() => setJournalOpen(false)}
+      />
     </div>
   );
 }

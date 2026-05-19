@@ -83,6 +83,98 @@ pub fn vault_undo(app: AppHandle, vault: String) -> Result<UndoReport, String> {
     })
 }
 
+/// Reapply the most-recent journaled undo. Mirrors `vault_undo` —
+/// errors when the redo stack is empty (no recent undo, or a
+/// fresh write has invalidated it). Returns the path affected so
+/// the UI can refresh open editors / the file tree.
+#[tauri::command]
+pub fn vault_redo(app: AppHandle, vault: String) -> Result<RedoReport, String> {
+    let out = journal::redo_last_op(&vault)?
+        .ok_or_else(|| "nothing to redo".to_string())?;
+    if let Some(w) = out.journal.git_warning {
+        let _ = app.emit("vault-warning", format!("git: {w}"));
+    }
+    Ok(RedoReport {
+        path: out.path,
+        target_undo_id: out.target_undo_id,
+        was_creation: out.was_creation,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedoReport {
+    pub path: String,
+    pub target_undo_id: String,
+    pub was_creation: bool,
+}
+
+/// Recent journal entries, newest first. Caps at `limit` rows so a
+/// long history doesn't ship megabytes to the frontend on every
+/// open. `Op::Write` and `Op::Undo` are both surfaced — the
+/// frontend filters / colors them for display.
+#[tauri::command]
+pub fn vault_journal_recent(
+    vault: String,
+    limit: Option<usize>,
+) -> Result<Vec<JournalEntryDto>, String> {
+    let limit = limit.unwrap_or(100).clamp(1, 1000);
+    let entries = journal::recent_entries(&vault, limit)?;
+    Ok(entries.into_iter().map(JournalEntryDto::from).collect())
+}
+
+/// Frontend-friendly shape of `journal::JournalEntry`. The core type
+/// uses `#[serde(tag = "op")]` (snake_case) which serialises as
+/// `{ id, ts, tool, path, op: "write", before_sha, after_sha }`
+/// merged via `#[serde(flatten)]`. We flatten to a stable
+/// camelCase shape and split the op kind into a discriminator
+/// string so the frontend renders without pattern-matching.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalEntryDto {
+    pub id: String,
+    pub ts: u64,
+    pub tool: String,
+    pub path: String,
+    /// One of `"write"` or `"undo"`.
+    pub kind: String,
+    pub before_sha: Option<String>,
+    pub after_sha: Option<String>,
+    /// Present only when `kind == "undo"`.
+    pub target_id: Option<String>,
+}
+
+impl From<journal::JournalEntry> for JournalEntryDto {
+    fn from(e: journal::JournalEntry) -> Self {
+        match e.op {
+            journal::Op::Write { before_sha, after_sha } => Self {
+                id: e.id,
+                ts: e.ts,
+                tool: e.tool,
+                path: e.path,
+                kind: "write".into(),
+                before_sha,
+                after_sha,
+                target_id: None,
+            },
+            journal::Op::Undo {
+                target_id,
+                before_sha,
+                after_sha,
+            } => Self {
+                id: e.id,
+                ts: e.ts,
+                tool: e.tool,
+                path: e.path,
+                kind: "undo".into(),
+                before_sha,
+                after_sha,
+                target_id: Some(target_id),
+            },
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoReport {

@@ -41,6 +41,8 @@ pub fn run() {
             vault::vault_rename,
             vault::vault_resolve_wikilink,
             vault::vault_undo,
+            vault::vault_redo,
+            vault::vault_journal_recent,
             search::vault_search,
             search::vault_index_open,
             search::vault_index_touch,

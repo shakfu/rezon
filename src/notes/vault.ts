@@ -52,6 +52,41 @@ export async function vaultUndo(vault: string): Promise<UndoReport> {
   return invoke<UndoReport>("vault_undo", { vault });
 }
 
+export type RedoReport = {
+  path: string;
+  targetUndoId: string;
+  wasCreation: boolean;
+};
+
+/// Reapply the most recent journaled undo. Errors when nothing to
+/// redo (no recent undo, or a fresh write has invalidated the redo
+/// stack). Same refresh contract as `vaultUndo`.
+export async function vaultRedo(vault: string): Promise<RedoReport> {
+  return invoke<RedoReport>("vault_redo", { vault });
+}
+
+export type JournalEntryDto = {
+  id: string;
+  ts: number;
+  tool: string;
+  path: string;
+  /// "write" | "undo"
+  kind: string;
+  beforeSha: string | null;
+  afterSha: string | null;
+  targetId: string | null;
+};
+
+/// Recent journal entries (default 100, newest first) for the open
+/// vault. Lightweight read of `.rezon-history/log.jsonl` — safe to
+/// call on every panel open without throttling.
+export async function vaultJournalRecent(
+  vault: string,
+  limit?: number,
+): Promise<JournalEntryDto[]> {
+  return invoke<JournalEntryDto[]>("vault_journal_recent", { vault, limit });
+}
+
 export type SearchHit = { path: string; snippet: string };
 
 export async function indexOpen(vault: string): Promise<void> {

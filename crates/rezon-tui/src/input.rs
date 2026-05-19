@@ -57,6 +57,7 @@ pub const COMMANDS: &[&str] = &[
     "quit",
     "rename",
     "search",
+    "redo",
     "setup",
     "undo",
     "system",

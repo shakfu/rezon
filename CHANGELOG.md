@@ -6,6 +6,43 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Vault redo** (`crates/rezon-core/src/journal.rs::redo_last_op`).
+  Reapplies the most-recent `Op::Undo`: restores its `before_sha`
+  content (the disk state immediately before the undo ran) and
+  records a fresh `Op::Write` tagged `tool: "redo"`. No new `Op`
+  variant — a tagged write keeps the chain linear, so `undo→redo→
+  undo→redo` cycles cleanly and a fresh write between undo and
+  redo invalidates the redo stack (text-editor convention). Surface
+  in all three shells: `/redo` TUI command, `vault_redo` Tauri
+  command returning `RedoReport { path, targetUndoId, wasCreation }`,
+  `↷ Redo` button in the NotesView editor toolbar. Three new tests
+  cover round-trip, intervening-write invalidation, and the
+  deletion-undo redo path.
+- **Vault history panel** (`src/notes/JournalPanel.tsx`). Modal
+  dialog backed by a new `vault_journal_recent(vault, limit?)`
+  Tauri command (default 100 rows, clamped 1..=1000) over
+  `journal::recent_entries`. Renders `When | Kind | Tool | Path`
+  newest-first; `write` rows tinted green, `undo` rows red to
+  match the diff-preview palette. Same-day timestamps as `HH:MM`,
+  older as `YYYY-MM-DD HH:MM`. Triggered from a new `History`
+  button in NotesView's editor toolbar. Read-only — undo / redo
+  remain the action surface for v1; per-row "revert from here"
+  is a future addition once multi-step undo lands in core.
+- **`JournalEntryDto`** — frontend-stable shape over the core's
+  `#[serde(tag="op")]` enum. Flattens into a camelCase
+  `{ id, ts, tool, path, kind: "write"|"undo", beforeSha,
+  afterSha, targetId? }` so the frontend never pattern-matches on
+  serde tags.
+- **`read_note(path)` agent tool**
+  (`crates/rezon-core/src/agent/tools/read_note.rs`). Read-only,
+  no confirmation. Returns `{ vault, path, content }` for a note
+  at the given vault-relative path. Pairs with `search_notes`
+  (which returns snippets, not full bodies) to close the agent's
+  read loop: search → read → write/append/edit. Registered
+  together with `search_notes` in `register_search_notes` — both
+  depend on `SearchState::active_vault`, both are read-only. Two
+  tests.
+
 - **Wikilink expansion in chat + system prompts** (`crates/rezon-core/src/wikilink.rs`).
   Read-only `[[Target]]` / `[[Folder/Target]]` / `[[Target|Alias]]` markers
   in user messages and the system prompt resolve against the active vault

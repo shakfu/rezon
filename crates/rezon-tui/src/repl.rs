@@ -632,6 +632,7 @@ impl Repl {
             "models" => self.cmd_models(args),
             "setup" => self.cmd_setup(),
             "undo" => self.cmd_undo(),
+            "redo" => self.cmd_redo(),
             "" => {}
             other => {
                 println!(
@@ -685,6 +686,7 @@ impl Repl {
         help_row("/models [provider]", "list models for current provider (or named provider)");
         help_row("/setup", "re-run the first-launch configuration wizard");
         help_row("/undo", "revert the most recent vault edit (journal-backed)");
+        help_row("/redo", "reapply the most recent vault undo");
         help_row("/tools", "list tools (✓ enabled · · disabled)");
         help_row(
             "/tools disable <name>",
@@ -1882,6 +1884,44 @@ impl Repl {
                 }
             }
             Err(e) => println!("{err}/undo: {e}{reset}", err = C_ERR, reset = C_RESET),
+        }
+    }
+
+    fn cmd_redo(&mut self) {
+        let Some(vault) = self.vault.active_vault() else {
+            println!(
+                "{err}/redo requires an open vault{reset}",
+                err = C_ERR,
+                reset = C_RESET,
+            );
+            return;
+        };
+        match rezon_core::journal::redo_last_op(&vault) {
+            Ok(None) => println!(
+                "{meta}nothing to redo{reset}",
+                meta = C_META,
+                reset = C_RESET,
+            ),
+            Ok(Some(out)) => {
+                let abs = std::path::Path::new(&vault).join(&out.path);
+                let _ = rezon_core::search::vault_index_touch(
+                    &self.vault.search,
+                    &vault,
+                    &abs.to_string_lossy(),
+                );
+                let git_suffix = if out.journal.git_committed { " (git committed)" } else { "" };
+                println!(
+                    "{meta}redid {path}{git}{reset}",
+                    meta = C_META,
+                    reset = C_RESET,
+                    path = out.path,
+                    git = git_suffix,
+                );
+                if let Some(w) = out.journal.git_warning {
+                    println!("{meta}  git warning: {w}{reset}", meta = C_META, reset = C_RESET);
+                }
+            }
+            Err(e) => println!("{err}/redo: {e}{reset}", err = C_ERR, reset = C_RESET),
         }
     }
 
