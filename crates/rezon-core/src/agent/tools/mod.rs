@@ -10,6 +10,7 @@ pub mod file_read;
 pub mod search_notes;
 pub mod shell_exec;
 pub mod web_fetch;
+pub mod write_note;
 
 use std::sync::Arc;
 
@@ -33,4 +34,16 @@ pub fn register_search_notes(
     embed: Arc<EmbedState>,
 ) {
     reg.register(Arc::new(search_notes::SearchNotes::new(search, embed)));
+}
+
+/// Register the vault-write tools (`write_note`, `append_note`,
+/// `edit_note`). All three need an open vault and all three gate on
+/// user confirmation. The function keeps its historical name so the
+/// shell call sites stay terse and symmetrical with
+/// `register_search_notes`.
+pub fn register_write_note(reg: &mut ToolRegistry, search: Arc<SearchState>) {
+    reg.register(Arc::new(write_note::WriteNote::new(search.clone())));
+    reg.register(Arc::new(write_note::AppendNote::new(search.clone())));
+    reg.register(Arc::new(write_note::EditNote::new(search.clone())));
+    reg.register(Arc::new(write_note::UndoNote::new(search)));
 }

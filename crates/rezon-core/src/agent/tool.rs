@@ -42,6 +42,18 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Optional human-readable preview of what dispatch will do,
+    /// given the parsed `args`. Confirmation UIs render this in
+    /// place of the raw JSON args when it's `Some`. By convention:
+    ///   * Lines starting with `+ ` are additions (green-tinted)
+    ///   * Lines starting with `- ` are removals (red-tinted)
+    ///   * Lines starting with `  ` (two spaces) are unchanged
+    ///     context. Other lines render as plain text.
+    /// Returning `None` falls back to the raw arguments JSON.
+    fn preview(&self, _args: &Value) -> Option<String> {
+        None
+    }
+
     /// Execute the tool. `args` is the parsed parameters object as
     /// JSON; implementations are responsible for argument validation
     /// and coercion. The returned `Value` is serialized into a `tool`

@@ -14,6 +14,8 @@
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-code-bg: var(--code-bg);
   --color-code-fg: var(--code-fg);
   --font-sans: system-ui, -apple-system, sans-serif;
@@ -37,6 +39,11 @@
   --accent-soft: rgba(80, 130, 220, 0.18);
   --danger: #c33;
   --danger-soft: rgba(220, 80, 80, 0.15);
+  /* Diff/journal preview affordances and the wikilink-warning banner.
+   * Kept slightly desaturated against `--bg` so the tinted blocks
+   * don't dominate the chat surface. */
+  --success: #4ec775;
+  --warning: #d4a04b;
   --code-bg: #0d1117;
   --code-fg: #e6edf3;
 }
@@ -54,6 +61,8 @@
   --accent-soft: rgba(80, 130, 220, 0.18);
   --danger: #b91c1c;
   --danger-soft: rgba(220, 80, 80, 0.12);
+  --success: #15803d;
+  --warning: #b45309;
   --code-bg: #f3f3f3;
   --code-fg: #1a1a1a;
 }

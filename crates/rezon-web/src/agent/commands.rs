@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
 use crate::agent::{
@@ -16,7 +16,7 @@ use crate::agent::{
     run_agent, tauri_gate::TauriConfirmationGate, tauri_sink::TauriEventSink, AgentOpts,
     ChatMessage, Provider, ProviderOpts, ToolRegistry,
 };
-use rezon_core::agent::tools::{register_core_tools, register_search_notes};
+use rezon_core::agent::tools::{register_core_tools, register_search_notes, register_write_note};
 use rezon_core::embed::EmbedState;
 use rezon_core::llm;
 use rezon_core::search::SearchState;
@@ -119,6 +119,7 @@ pub fn tools_catalog(
     let mut reg = ToolRegistry::new();
     register_core_tools(&mut reg);
     register_search_notes(&mut reg, search.inner().clone(), embed.inner().clone());
+    register_write_note(&mut reg, search.inner().clone());
     reg.tools()
         .map(|t| ToolInfo {
             name: t.name().to_string(),
@@ -166,7 +167,8 @@ pub async fn agent_chat(
         register_core_tools(&mut reg);
         let search = app.state::<Arc<SearchState>>().inner().clone();
         let embed = app.state::<Arc<EmbedState>>().inner().clone();
-        register_search_notes(&mut reg, search, embed);
+        register_search_notes(&mut reg, search.clone(), embed);
+        register_write_note(&mut reg, search);
         Arc::new(reg.without(&disabled))
     };
     let sink = Arc::new(TauriEventSink::new(app.clone()));
@@ -197,6 +199,14 @@ pub async fn agent_chat(
     };
 
     let mut messages = messages;
+    // Wikilink expansion mirrors the non-agent `chat` command:
+    // system + last user message get a `<context>` block appended
+    // for any resolvable `[[Target]]` references. Past turns are
+    // left untouched so prompt caching survives.
+    let vault = app.state::<Arc<SearchState>>().active_vault();
+    if let Some(v) = vault.as_deref() {
+        expand_agent_messages(v, &mut messages, &app);
+    }
     let result = run_agent(provider, registry, sink, &mut messages, agent_opts).await;
 
     // Clear the active cancel slot only if it is still ours; concurrent
@@ -280,4 +290,33 @@ fn resolve_cloud_config(opts: &AgentChatOpts) -> Result<(String, String, String)
         .ok_or_else(|| "model is required".to_string())?;
 
     Ok((api_key, base_url, model))
+}
+
+/// Apply `wikilink::expand` to the system message and the most-recent
+/// user turn. Tool / assistant turns and older user turns pass
+/// through untouched so the LLM provider's prompt cache stays valid.
+/// Unresolved markers surface via a `chat-warning` event.
+fn expand_agent_messages(vault: &str, msgs: &mut [ChatMessage], app: &AppHandle) {
+    if let Some(first) = msgs.first_mut() {
+        if let ChatMessage::System { content } = first {
+            *content = apply_expand(vault, content, app);
+        }
+    }
+    for msg in msgs.iter_mut().rev() {
+        if let ChatMessage::User { content } = msg {
+            *content = apply_expand(vault, content, app);
+            break;
+        }
+    }
+}
+
+fn apply_expand(vault: &str, text: &str, app: &AppHandle) -> String {
+    let r = rezon_core::wikilink::expand(vault, text);
+    if !r.unresolved.is_empty() {
+        let _ = app.emit(
+            "chat-warning",
+            format!("wikilink unresolved: {}", r.unresolved.join(", ")),
+        );
+    }
+    r.text
 }

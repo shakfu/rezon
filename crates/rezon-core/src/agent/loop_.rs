@@ -149,7 +149,17 @@ pub async fn run_agent(
             // ToolEnd so the UI's pill collapses to an error state,
             // and a tool message is appended to the history so the
             // model can react.
-            let outcome = opts.gate.ask(call).await;
+            // Render the preview once per call before the gate
+            // prompt. Failure to parse the model's `arguments` JSON
+            // is non-fatal — the gate just shows the raw args, which
+            // is what it would have done before the preview hook
+            // existed.
+            let preview = registry.get(&call.name).and_then(|tool| {
+                serde_json::from_str::<Value>(&call.arguments)
+                    .ok()
+                    .and_then(|v| tool.preview(&v))
+            });
+            let outcome = opts.gate.ask(call, preview.as_deref()).await;
             if matches!(outcome, ConfirmationOutcome::Denied) {
                 sink.emit(AgentEvent::ToolStart {
                     id: call.id.clone(),

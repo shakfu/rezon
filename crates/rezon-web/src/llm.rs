@@ -8,6 +8,7 @@ use std::sync::Arc;
 use rezon_core::llm::{
     self, ChatMsg, ChatOpts, ChatSink, ChatStats, CloudProviderDef, ModelStatus,
 };
+use rezon_core::search::SearchState;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -88,11 +89,50 @@ pub fn cancel_chat(state: State<'_, Arc<LlmState>>) {
 pub async fn chat(
     app: AppHandle,
     state: State<'_, Arc<LlmState>>,
-    messages: Vec<ChatMsg>,
+    mut messages: Vec<ChatMsg>,
     opts: ChatOpts,
 ) -> Result<String, String> {
+    // Expand `[[wikilink]]` markers against the active vault (if
+    // any). System message + most recent user turn only; everything
+    // else passes through so prompt caching stays valid across turns.
+    // Resolution happens here at the send boundary so storage
+    // (frontend state) keeps the raw markers.
+    let vault = app.state::<Arc<SearchState>>().active_vault();
+    if let Some(v) = vault.as_deref() {
+        expand_send_msgs(v, &mut messages, &app);
+    }
     let sink: Arc<dyn ChatSink> = Arc::new(TauriChatSink::new(app));
     llm::chat(state.inner().as_ref(), messages, opts, sink).await
+}
+
+/// Apply wikilink expansion to a chat message vec destined for the
+/// LLM. Mutates the system message (if any, at index 0) and the most
+/// recent user message; everything else passes through. Unresolved
+/// markers are emitted as a `chat-warning` event so the frontend can
+/// surface them next to the conversation.
+fn expand_send_msgs(vault: &str, msgs: &mut [ChatMsg], app: &AppHandle) {
+    if let Some(first) = msgs.first_mut() {
+        if first.role == "system" {
+            first.content = expand_field(vault, &first.content, app);
+        }
+    }
+    for msg in msgs.iter_mut().rev() {
+        if msg.role == "user" {
+            msg.content = expand_field(vault, &msg.content, app);
+            break;
+        }
+    }
+}
+
+fn expand_field(vault: &str, text: &str, app: &AppHandle) -> String {
+    let r = rezon_core::wikilink::expand(vault, text);
+    if !r.unresolved.is_empty() {
+        let _ = app.emit("chat-warning", format!(
+            "wikilink unresolved: {}",
+            r.unresolved.join(", ")
+        ));
+    }
+    r.text
 }
 
 #[derive(Debug, Clone, Serialize)]

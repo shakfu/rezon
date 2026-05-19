@@ -38,19 +38,23 @@ impl TauriConfirmationGate {
 
 #[async_trait]
 impl ConfirmationGate for TauriConfirmationGate {
-    async fn ask(&self, call: &ToolCall) -> ConfirmationOutcome {
+    async fn ask(&self, call: &ToolCall, preview: Option<&str>) -> ConfirmationOutcome {
         match self.permission_for(&call.name) {
             "always" => ConfirmationOutcome::Approved,
             // "disable" tools are filtered before the loop; if one
             // somehow gets here, deny rather than auto-approve.
             "disable" => ConfirmationOutcome::Denied,
             // Anything else (incl. "ask", missing, unknown values) -> prompt.
-            _ => prompt_user(&self.app, call).await,
+            _ => prompt_user(&self.app, call, preview).await,
         }
     }
 }
 
-async fn prompt_user(app: &AppHandle, call: &ToolCall) -> ConfirmationOutcome {
+async fn prompt_user(
+    app: &AppHandle,
+    call: &ToolCall,
+    preview: Option<&str>,
+) -> ConfirmationOutcome {
     let id = next_confirmation_id();
 
     // Register synchronously, drop the State borrow before awaiting.
@@ -65,6 +69,10 @@ async fn prompt_user(app: &AppHandle, call: &ToolCall) -> ConfirmationOutcome {
             "confirmationId": id,
             "name": call.name,
             "arguments": call.arguments,
+            // Preview is omitted (rather than null) when the tool
+            // doesn't provide one; the frontend should fall back to
+            // rendering `arguments` in that case.
+            "preview": preview,
         }),
     );
 

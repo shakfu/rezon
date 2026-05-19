@@ -23,7 +23,13 @@ pub enum ConfirmationOutcome {
 
 #[async_trait]
 pub trait ConfirmationGate: Send + Sync {
-    async fn ask(&self, call: &ToolCall) -> ConfirmationOutcome;
+    /// Decide whether to dispatch `call`. `preview` is an optional
+    /// human-readable rendering of what the tool will do (see
+    /// `Tool::preview`); confirmation UIs should display it in
+    /// place of the raw arguments JSON when present. The agent
+    /// loop computes the preview once per call before invoking the
+    /// gate so each implementation gets it for free.
+    async fn ask(&self, call: &ToolCall, preview: Option<&str>) -> ConfirmationOutcome;
 }
 
 /// Always approves. Suitable for examples, tests, and anywhere the
@@ -32,7 +38,7 @@ pub struct AutoApproveGate;
 
 #[async_trait]
 impl ConfirmationGate for AutoApproveGate {
-    async fn ask(&self, _call: &ToolCall) -> ConfirmationOutcome {
+    async fn ask(&self, _call: &ToolCall, _preview: Option<&str>) -> ConfirmationOutcome {
         ConfirmationOutcome::Approved
     }
 }

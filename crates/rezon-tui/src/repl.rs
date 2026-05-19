@@ -332,7 +332,13 @@ impl Repl {
     fn spawn_chat(&self) {
         let state = self.state.clone();
         let opts = self.effective_chat_opts();
-        let msgs = self.store.active().messages.clone();
+        let mut msgs = self.store.active().messages.clone();
+        // Stored conversation keeps the raw `[[wikilink]]` markers
+        // (for legibility in /history and to re-resolve on each
+        // turn). Expansion happens here at the send boundary, and
+        // only on the system + last user message so prompt caching
+        // stays valid across turns.
+        self.expand_send_msgs(&mut msgs);
         let sink: Arc<dyn ChatSink> = Arc::new(TuiChatSink::new(self.ui_tx.clone()));
         let tx = self.ui_tx.clone();
         tokio::spawn(async move {
@@ -352,6 +358,16 @@ impl Repl {
         // `search_notes` is only registered when a vault is open;
         // otherwise the tool wouldn't have anywhere to search.
         let vault_arg = self.vault.active_vault().is_some().then_some(&self.vault);
+        // Expand wikilinks the same way the chat path does: the
+        // history's system message and the current user input both
+        // get a `<context>` block appended for resolved targets.
+        // Past assistant/user turns pass through untouched.
+        let user_input = self.expand_for_vault(&user_input);
+        if let Some(sys) = history.first_mut() {
+            if sys.role == "system" {
+                sys.content = self.expand_for_vault(&sys.content);
+            }
+        }
         match spawn_agent_run(
             self.state.clone(),
             self.effective_chat_opts(),
@@ -367,6 +383,45 @@ impl Repl {
                 let _ = self.ui_tx.send(UiEvent::Error(e.to_string()));
             }
         }
+    }
+
+    /// Apply wikilink expansion to a chat message vec destined for
+    /// the LLM. Mutates the system message (if any, at index 0) and
+    /// the most recent user message; everything else passes through
+    /// so already-cached prefixes stay stable.
+    fn expand_send_msgs(&self, msgs: &mut [llm::ChatMsg]) {
+        // System slot — conventionally the first message when set.
+        if let Some(first) = msgs.first_mut() {
+            if first.role == "system" {
+                first.content = self.expand_for_vault(&first.content);
+            }
+        }
+        // Most recent user turn (walking from the end is cheaper
+        // than scanning the whole vec, and the last user is
+        // typically at or near the tail).
+        for msg in msgs.iter_mut().rev() {
+            if msg.role == "user" {
+                msg.content = self.expand_for_vault(&msg.content);
+                break;
+            }
+        }
+    }
+
+    fn expand_for_vault(&self, text: &str) -> String {
+        let Some(vault) = self.vault.active_vault() else {
+            return text.to_string();
+        };
+        let r = rezon_core::wikilink::expand(&vault, text);
+        if !r.unresolved.is_empty() {
+            // Non-fatal: report each unresolvable marker but still
+            // send the message. The original `[[X]]` stays in place
+            // so the user can see what didn't resolve.
+            let list = r.unresolved.join(", ");
+            let _ = self.ui_tx.send(UiEvent::Error(format!(
+                "wikilink unresolved: {list}"
+            )));
+        }
+        r.text
     }
 
     /// Drain events until Done / Error. Handles tool confirmation
@@ -477,9 +532,9 @@ impl Repl {
                                        else { format!("{err}✗{reset}", err = C_ERR, reset = C_RESET) };
                             println!("  {icon} {dim}{summary}{reset}", dim = C_DIM, reset = C_RESET);
                         }
-                        UiEvent::Confirm { name, arguments, tx } => {
+                        UiEvent::Confirm { name, arguments, preview, tx } => {
                             if newline_pending { println!(); newline_pending = false; }
-                            let approved = prompt_yes_no(&name, &arguments).await;
+                            let approved = prompt_yes_no(&name, &arguments, preview.as_deref()).await;
                             let _ = tx.send(approved);
                         }
                         UiEvent::AgentHistory(msgs) => {
@@ -576,6 +631,7 @@ impl Repl {
             "fork" => self.cmd_fork(),
             "models" => self.cmd_models(args),
             "setup" => self.cmd_setup(),
+            "undo" => self.cmd_undo(),
             "" => {}
             other => {
                 println!(
@@ -628,6 +684,7 @@ impl Repl {
         help_row("/fork", "duplicate the active conversation");
         help_row("/models [provider]", "list models for current provider (or named provider)");
         help_row("/setup", "re-run the first-launch configuration wizard");
+        help_row("/undo", "revert the most recent vault edit (journal-backed)");
         help_row("/tools", "list tools (✓ enabled · · disabled)");
         help_row(
             "/tools disable <name>",
@@ -1077,7 +1134,7 @@ impl Repl {
         // list reflects what the agent actually sees.
         use rezon_core::agent::{
             tool::ToolRegistry,
-            tools::{register_core_tools, register_search_notes},
+            tools::{register_core_tools, register_search_notes, register_write_note},
         };
         let mut reg = ToolRegistry::new();
         register_core_tools(&mut reg);
@@ -1087,6 +1144,7 @@ impl Repl {
                 self.vault.search.clone(),
                 self.vault.embed.clone(),
             );
+            register_write_note(&mut reg, self.vault.search.clone());
         }
         let all: Vec<String> = reg.names().map(str::to_string).collect();
 
@@ -1785,6 +1843,93 @@ impl Repl {
         }
     }
 
+    fn cmd_undo(&mut self) {
+        let Some(vault) = self.vault.active_vault() else {
+            println!(
+                "{err}/undo requires an open vault{reset}",
+                err = C_ERR,
+                reset = C_RESET,
+            );
+            return;
+        };
+        let target = match rezon_core::journal::last_undoable(&vault) {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                println!(
+                    "{meta}nothing to undo{reset}",
+                    meta = C_META,
+                    reset = C_RESET,
+                );
+                return;
+            }
+            Err(e) => {
+                println!("{err}/undo: {e}{reset}", err = C_ERR, reset = C_RESET);
+                return;
+            }
+        };
+        let (target_id, target_path, before_sha) = match target.op {
+            rezon_core::journal::Op::Write { before_sha, .. } => {
+                (target.id, target.path, before_sha)
+            }
+            _ => {
+                println!(
+                    "{err}/undo: non-reversible entry{reset}",
+                    err = C_ERR,
+                    reset = C_RESET,
+                );
+                return;
+            }
+        };
+        let abs = std::path::Path::new(&vault).join(&target_path);
+        let current = std::fs::read(&abs).ok();
+        let restore_result = match &before_sha {
+            Some(sha) => rezon_core::journal::read_blob(&vault, sha)
+                .and_then(|bytes| std::fs::write(&abs, &bytes).map_err(|e| e.to_string())),
+            None => {
+                if abs.exists() {
+                    std::fs::remove_file(&abs).map_err(|e| e.to_string())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+        if let Err(e) = restore_result {
+            println!("{err}/undo restore: {e}{reset}", err = C_ERR, reset = C_RESET);
+            return;
+        }
+        let new_after = std::fs::read(&abs).ok();
+        let outcome = rezon_core::journal::record_undo(
+            &vault,
+            &target_path,
+            &target_id,
+            current.as_deref(),
+            new_after.as_deref(),
+        );
+        match outcome {
+            Ok(j) => {
+                let git_suffix = if j.git_committed { " (git committed)" } else { "" };
+                println!(
+                    "{meta}undid {tool} on {path}{git}{reset}",
+                    meta = C_META,
+                    reset = C_RESET,
+                    tool = target.tool,
+                    path = target_path,
+                    git = git_suffix,
+                );
+                if let Some(w) = j.git_warning {
+                    println!("{meta}  git warning: {w}{reset}", meta = C_META, reset = C_RESET);
+                }
+            }
+            Err(e) => {
+                println!(
+                    "{err}/undo journaled poorly: {e}{reset}",
+                    err = C_ERR,
+                    reset = C_RESET,
+                );
+            }
+        }
+    }
+
     fn cmd_setup(&mut self) {
         if let Err(e) = crate::setup::run_forced(&mut self.store) {
             println!("{err}setup: {e}{reset}", err = C_ERR, reset = C_RESET);
@@ -2098,14 +2243,22 @@ fn print_stats(s: &StatsLite) {
     );
 }
 
-async fn prompt_yes_no(name: &str, arguments: &str) -> bool {
+async fn prompt_yes_no(name: &str, arguments: &str, preview: Option<&str>) -> bool {
+    // When the tool provided a rendered preview, show it instead of
+    // the raw arguments JSON: lines prefixed `+ ` go green, `- ` go
+    // red, everything else stays default-fg. The y/N prompt sits
+    // immediately under the preview so the user's eye lands on it
+    // without scanning past the body.
+    let body = match preview {
+        Some(p) => colorize_diff(p),
+        None => format!("{dim}with args{reset} {arguments}", dim = C_DIM, reset = C_RESET),
+    };
     let prompt = format!(
-        "{tool}approve tool{reset} {bold}{name}{reset} {dim}with args{reset} {arguments}\n{user}[y/N] > ",
+        "{tool}approve tool{reset} {bold}{name}{reset}\n{body}\n{user}[y/N] > ",
         tool = C_TOOL,
         reset = C_RESET,
         bold = C_BOLD,
         user = C_USER,
-        dim = C_DIM,
     );
     let resp = tokio::task::spawn_blocking(move || {
         print!("{prompt}");
@@ -2119,4 +2272,26 @@ async fn prompt_yes_no(name: &str, arguments: &str) -> bool {
     .await
     .unwrap_or_default();
     matches!(resp.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// Apply ANSI colour to a preview returned by `Tool::preview`.
+///   * `+ ` → green
+///   * `- ` → red
+///   * everything else → default fg
+/// Strictly line-oriented; doesn't try to render intra-line diffs.
+fn colorize_diff(preview: &str) -> String {
+    let mut out = String::with_capacity(preview.len() + 64);
+    for (i, line) in preview.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if let Some(rest) = line.strip_prefix("+ ") {
+            out.push_str(&format!("{C_OK}+ {rest}{C_RESET}"));
+        } else if let Some(rest) = line.strip_prefix("- ") {
+            out.push_str(&format!("{C_ERR}- {rest}{C_RESET}"));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }

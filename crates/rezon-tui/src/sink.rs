@@ -40,6 +40,9 @@ pub enum UiEvent {
     Confirm {
         name: String,
         arguments: String,
+        /// Optional pre-rendered preview from `Tool::preview`. When
+        /// `Some`, the REPL shows this in place of the raw JSON args.
+        preview: Option<String>,
         tx: oneshot::Sender<bool>,
     },
     /// Final agent-loop message vector, serialised back to
@@ -150,7 +153,7 @@ impl TuiConfirmationGate {
 
 #[async_trait]
 impl ConfirmationGate for TuiConfirmationGate {
-    async fn ask(&self, call: &ToolCall) -> ConfirmationOutcome {
+    async fn ask(&self, call: &ToolCall, preview: Option<&str>) -> ConfirmationOutcome {
         if self.cancelled.load(Ordering::Relaxed) {
             return ConfirmationOutcome::Denied;
         }
@@ -160,6 +163,7 @@ impl ConfirmationGate for TuiConfirmationGate {
             .send(UiEvent::Confirm {
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
+                preview: preview.map(str::to_string),
                 tx,
             })
             .is_err()

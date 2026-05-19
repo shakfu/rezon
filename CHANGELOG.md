@@ -6,6 +6,198 @@ All notable changes to this project. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Wikilink expansion in chat + system prompts** (`crates/rezon-core/src/wikilink.rs`).
+  Read-only `[[Target]]` / `[[Folder/Target]]` / `[[Target|Alias]]` markers
+  in user messages and the system prompt resolve against the active vault
+  via `vault_resolve_wikilink`, and the resolved note bodies are appended
+  to the message as a `<context>\n## <rel path>\n…\n</context>` block.
+  Stored conversation keeps the raw markers (so `/history` reads naturally
+  and edits re-resolve next turn); expansion happens only at the send
+  boundary and only on the system + most-recent user turn so prompt
+  caching survives prior turns. Unresolved targets surface as
+  `UiEvent::Error` in the TUI and a `chat-warning` Tauri event for the
+  frontend. Eight unit tests (`scan_*`, `expand_*`).
+- **Vault-write agent tools** (`crates/rezon-core/src/agent/tools/write_note.rs`):
+  `write_note(path, content, overwrite=false)`, `append_note(path,
+  content, create_if_missing=false)`, `edit_note(path, find, replace)`,
+  `undo_note()`. All four gate on user confirmation, path-normalize
+  (strip leading `/`, reject `..`, auto-append `.md`), call
+  `vault_index_touch` so changes are searchable immediately, and report
+  the journal outcome (entry id + git_committed + warning?) in their
+  return payload. `edit_note`'s `find` must match exactly once — 0 or
+  N≥2 matches error with a hint to pass a longer / more specific
+  snippet. Registered together via `register_write_note(reg, search)`
+  alongside `search_notes` when a vault is open.
+- **`Tool::preview` method** (`crates/rezon-core/src/agent/tool.rs`).
+  Optional `fn preview(&self, args: &Value) -> Option<String>` returning
+  a diff-shaped string (`+ ` add lines, `- ` remove lines, anything
+  else context). Agent loop computes the preview once per call from the
+  registry + parsed args, then passes `Option<&str>` into
+  `ConfirmationGate::ask`. TUI prompt and Tauri `agent-tool-confirm`
+  event both surface it; UIs render the preview in place of raw
+  arguments JSON when present. `WriteNote`/`AppendNote`/`EditNote`/
+  `UndoNote` all override it.
+- **Edit journal + git versioning** (`crates/rezon-core/src/journal.rs`).
+  Append-only `<vault>/.rezon-history/log.jsonl` records every mutation
+  (write / undo) with sha256 before+after pointers; content snapshots
+  live deduped in `<vault>/.rezon-history/blobs/<sha>`. After each
+  successful record, opportunistic `git add <file> .gitignore && git
+  commit -q -m "rezon: <tool> <rel_path>"` against the vault's git repo
+  (auto-`git init`'d if missing). `.rezon-history/` is added to
+  `.gitignore` on first write so the journal stays out of the user's
+  git log. Hook + signing config respected; failures are non-fatal and
+  surface via `JournalOutcome::git_warning`. `last_undoable(vault)`
+  walks the log skipping any entry already targeted by a subsequent
+  `Op::Undo`. Eight unit tests covering record, dedup, gitignore
+  idempotency, GC, and skip-git.
+- **`.rezon-skip-git` sentinel** — touch `<vault>/.rezon-skip-git` to
+  opt this vault out of the git auto-init/auto-commit (journal still
+  records). Useful for vaults nested inside an outer repo where rezon
+  shouldn't create a second one. Silent skip — no warning when the
+  sentinel is present.
+- **Journal GC** — `journal::gc(vault_root, max_entries)` keeps the
+  most-recent N entries (default 500), atomically rewrites `log.jsonl`
+  via temp+rename, then prunes any blob no surviving entry references.
+  Triggered automatically at the end of every `record_write` /
+  `record_undo`; failures are non-fatal.
+- **`undo_note` agent tool + `/undo` TUI command + `vault_undo` Tauri
+  command**. All three revert the most-recent journaled mutation:
+  `undo_note` is agent-callable (confirmation-gated, with a diff
+  preview); `/undo` is the user-direct entry point in the REPL;
+  `vault_undo` is exposed to the frontend (returns `{ path, targetId }`
+  on success). Each appends a new `Op::Undo` entry so the chain is
+  walkable.
+- **First-launch setup wizard** (`crates/rezon-tui/src/setup.rs`) and
+  `/setup` command. On first launch (or whenever required fields are
+  missing in `conversations.json`), prompts via rustyline for:
+  models dir, vault dir, output dir, and default provider. Each prompt
+  pre-fills the current value as editable text (`readline_with_initial`)
+  — `<enter>` accepts, edit-in-place changes, empty input clears,
+  ctrl-c aborts. Path prompts wire in `FilenameCompleter`; provider
+  prompt completes from the static word list (local / openai /
+  anthropic / openrouter / other). Wizard fires when
+  `setup_complete: bool` is false; `/setup` re-runs on demand.
+  Defaults follow env vars (`REZON_{MODELS,VAULT,OUTPUT}_DIR`,
+  `REZON_PROVIDER`) when set, otherwise fall back to
+  `~/Documents/Rezon/{models,vault,exports}` for the three path
+  fields. Persisted in `StoreFile` as `setup_complete`, `models_dir`,
+  `output_dir`, `default_provider` (all `#[serde(default)]` so
+  upgrades are silent).
+- **Slash-command pickers**. `/provider` and `/model` (no args) open
+  the embedded fuzzy picker. `/provider` lists `local` + every cloud
+  provider key from `models.json` with the current marked `*`;
+  selecting clears the per-conv model override so the new provider's
+  default kicks in. `/model` lists the current provider's
+  recommended models for cloud, or scans the configured models dir
+  for `*.gguf` files when provider is `local` — the picker
+  load-and-set on selection via `spinner::with_spinner`. `/models`
+  (no args) defaults to listing the current provider's catalog
+  rather than first asking which provider.
+- **`/export` honors `output_dir`** — bare filename goes there;
+  empty arg auto-names from the conversation title under the
+  configured output dir. Absolute or slash-containing paths still
+  pass through. Parent dirs created as needed.
+- **`last_local_model` auto-load**. On startup, when provider is
+  `local` and neither `--gguf` nor `--model <path>` was passed, the
+  TUI falls back to `rezon_core::llm::read_last_model(<config_dir>)`
+  (the same helper the web app already used). Every successful local
+  load — at startup, via `/load`, or via the `/model` picker — calls
+  `persist_last_model` so the next launch resumes the same GGUF.
+- **Diff-preview rendering in the confirmation surface**. The TUI's
+  `prompt_yes_no` runs the preview through `colorize_diff` (`+ `
+  lines green, `- ` red) and lets the y/N prompt sit right below.
+  Frontend (`src/App.tsx`) gains a `DiffPreview` component that
+  renders the same convention in the `ConfirmToolDialog` modal —
+  `bg-success/10 text-success` for `+ `, `bg-danger/10 text-danger`
+  for `- `, monospace block matching the existing argument-render
+  styling. New `--color-success` / `--color-warning` CSS variables
+  (dark + light), surfaced as Tailwind tokens.
+- **`chat-warning` banner in the chat tab**. `src/App.tsx` listens for
+  the Tauri event emitted by `crates/rezon-web/src/llm.rs::chat` (and
+  `agent::commands::agent_chat`) when wikilink expansion finds
+  unresolvable targets; renders as a dismissable yellow banner under
+  the message list, clears automatically when the next message is
+  sent.
+- **`↶ Undo` button in NotesView** (`src/notes/NotesView.tsx`). Sits
+  in the editor tab strip; flushes any pending debounced saves before
+  invoking `vault_undo`, then refreshes the affected tab's
+  `diskContent` + `liveContent` (or closes the tab if the file was
+  deleted by the revert). Refreshes the file tree to pick up
+  creates/deletes from the undo.
+- **`vault-warning` toast in NotesView**. Tauri `vault_write` /
+  `vault_undo` now emit `vault-warning` when the journal returns a git
+  warning (e.g. pre-commit hook rejected the auto-commit) or fails
+  outright. Frontend listens via `useEffect` and surfaces a
+  dismissable warning-colored banner below the file editor's error
+  banner.
+- **Tests**:
+  - `rezon-core` +12: `wikilink::scan_*`, `wikilink::expand_*`,
+    `write_note::normalize_rel_*`, `write_note::render_preview_*`,
+    `write_note::*_preview_*`, `journal::record_write_*`,
+    `journal::ensure_gitignore_is_idempotent`,
+    `journal::blob_dedup_on_identical_content`,
+    `journal::last_undoable_*`, `journal::gc_*`,
+    `journal::skip_git_sentinel_suppresses_commit`. Total: 53.
+
+### Changed
+- **Fresh conversation per launch**. After `Store::load_or_new`, if
+  the active conversation has any user turns, the TUI pushes a new
+  empty conversation and switches to it; the previous one stays in
+  `store.conversations` and is reachable via `/conv`. Persisted
+  immediately so a crash before the first turn doesn't re-resume the
+  old conversation. Skip when the active conv is already empty so
+  consecutive launches don't pile up blanks.
+- **llama.cpp / ggml log noise muted**. `LlamaBackend::void_logs()`
+  is called immediately after `LlamaBackend::init()` in
+  `crates/rezon-core/src/llm.rs::ensure_backend`. The global no-op
+  callback suppresses `ggml_metal_*`, `llama_model_loader:`,
+  `print_info:`, `load_tensors:`, `llama_context:`,
+  `llama_kv_cache:`, and `ggml_metal_library_compile_pipeline:`
+  output. The TUI also emits `\x1b[2J\x1b[3J\x1b[H` immediately
+  before `print_banner()` to wipe any stderr that beat `void_logs`,
+  gated on `IsTerminal`.
+- **Provider-precedence rule at TUI startup**. If `--provider` was
+  left at the CLI default (`openrouter`), the stored
+  `default_provider` from the setup wizard wins; an explicitly
+  passed `--provider X` still overrides for the session.
+  Local-model auto-load now also checks `cli.gguf`, then
+  `cli.model` (if it ends in `.gguf`), then
+  `read_last_model(<config_dir>)`.
+- **`ConfirmationGate::ask` signature**. `async fn ask(&self, call:
+  &ToolCall, preview: Option<&str>) -> ConfirmationOutcome`.
+  `AutoApproveGate`, `TuiConfirmationGate`, `TauriConfirmationGate`
+  updated; `UiEvent::Confirm` carries `preview: Option<String>` and
+  `agent-tool-confirm` Tauri event carries `preview?: string`.
+- **`StoreFile` schema**. New fields, all `#[serde(default)]` so
+  existing stores migrate silently: `setup_complete: bool`,
+  `models_dir: Option<String>`, `output_dir: Option<String>`,
+  `default_provider: Option<String>`.
+- **`store::config_dir()` is now `pub`** so the wizard and the
+  agent-tool path can compute defaults relative to the same dir
+  `Store` uses.
+
+### Fixed
+- **Crash on first-turn chat with a long conversation history**
+  (`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`).
+  `crates/rezon-core/src/llm.rs::run_chat_with_cache` and
+  `run_agent_with_cache` previously called `ctx.decode(&mut batch)`
+  with the entire `to_add` slice in one go. With `n_batch = 2048`,
+  any rendered prompt over ~2048 tokens (trivial for a 19-message
+  history) tripped the assert and aborted the process. Both paths
+  now chunk `to_add` into `ctx.n_batch()`-sized slices and decode
+  each in turn; the `logits=true` flag is set only on the prompt's
+  final token of the final chunk.
+- **`/models` no longer asks for provider first** when called with
+  no argument — defaults to the current effective provider (per the
+  user's mental model of "show models for the thing I'm using now").
+  Explicit `/models <key>` still works for browsing a different
+  provider's catalog.
+- **Hard error on `--provider local` without a GGUF path removed**.
+  Startup-load failures are now soft: the REPL boots regardless,
+  with a `note: provider is local but no model loaded — use /model to
+  pick one` message. The user can pick via the `/model` picker and
+  the model auto-loads.
+
 - **`rezon-tui` crate** — sequential REPL chat shell over `rezon-core`,
   shipped as the `rezon-tui` binary. Uses plain stdin/stdout (no
   alternate-screen takeover) so terminal scrollback / copy-paste /

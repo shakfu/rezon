@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import {
   VaultEntry,
   basename,
@@ -24,6 +25,7 @@ import {
   search as searchVault,
   searchSemantic,
   stripMdExt,
+  vaultUndo,
   writeFile,
   type EmbedStatus,
   type RelatedHit,
@@ -48,6 +50,10 @@ export function NotesView() {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Non-fatal vault notices (journal / git auto-commit warnings).
+  // Surfaced as a transient toast at the bottom of the editor pane;
+  // clicking ✕ or the next event dismisses the prior one.
+  const [vaultWarning, setVaultWarning] = useState<string | null>(null);
   // Inline prompt state. `window.prompt` does not work in Tauri's
   // webview, so we render a small input bar at the top of the sidebar
   // instead. `kind` tells the submit handler what to create / do.
@@ -134,6 +140,26 @@ export function NotesView() {
     })();
   }, [vault, refreshTree]);
 
+  // Subscribe to vault-warning events emitted by the Tauri vault
+  // commands when a non-fatal journal / git auto-commit issue
+  // happens (e.g. a pre-commit hook rejected our auto-commit). The
+  // event is the user-visible counterpart to the warning that the
+  // agent path already surfaces via `journal_report`.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      unlisten = await listen<string>("vault-warning", (e) => {
+        if (cancelled) return;
+        setVaultWarning(e.payload);
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Persist tab list / active tab.
   useEffect(() => {
     saveOpenTabs(tabs.map((t) => t.path));
@@ -211,6 +237,53 @@ export function NotesView() {
     },
     [tabs, activePath, vault],
   );
+
+  const onUndo = useCallback(async () => {
+    if (!vault) return;
+    // Flush any in-flight debounced save first so the journal entry
+    // we're about to revert reflects the user's *visible* state,
+    // not a stale on-disk snapshot the editor has already moved
+    // past. Wait for all flushes to land before invoking undo.
+    const pending: Promise<unknown>[] = [];
+    for (const [path, timer] of saveTimers.current) {
+      clearTimeout(timer);
+      saveTimers.current.delete(path);
+      const t = tabs.find((x) => x.path === path);
+      if (t && t.liveContent !== t.diskContent) {
+        pending.push(writeFile(vault, path, t.liveContent).catch(() => {}));
+      }
+    }
+    if (pending.length > 0) await Promise.all(pending);
+    try {
+      const report = await vaultUndo(vault);
+      // The file on disk was just replaced (or removed). Refresh
+      // any open tab pointing at the reverted path so the editor
+      // doesn't overwrite our work on its next debounced save.
+      const relPath = report.path;
+      const exists = tabs.some((t) => t.path === relPath);
+      if (exists) {
+        try {
+          const next = await readFile(vault, relPath);
+          setTabs((prev) =>
+            prev.map((t) =>
+              t.path === relPath
+                ? { ...t, diskContent: next, liveContent: next }
+                : t,
+            ),
+          );
+        } catch {
+          // File was deleted by the undo (target was a creation).
+          // Close the tab silently.
+          setTabs((prev) => prev.filter((t) => t.path !== relPath));
+          setActivePath((cur) => (cur === relPath ? null : cur));
+        }
+      }
+      // Tree refresh picks up creates/deletes from the revert.
+      await refreshTree(vault);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [vault, tabs, refreshTree]);
 
   const onEditorChange = useCallback(
     (path: string, markdown: string) => {
@@ -666,13 +739,14 @@ export function NotesView() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border-soft bg-bg-soft/40 px-1 py-1">
-          {tabs.length === 0 && (
-            <span className="px-2 text-[12px] opacity-50">
-              Open a note from the sidebar.
-            </span>
-          )}
-          {tabs.map((t) => {
+        <div className="flex shrink-0 items-center gap-1 border-b border-border-soft bg-bg-soft/40 px-1 py-1">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {tabs.length === 0 && (
+              <span className="px-2 text-[12px] opacity-50">
+                Open a note from the sidebar.
+              </span>
+            )}
+            {tabs.map((t) => {
             const active = t.path === activePath;
             const dirty = t.liveContent !== t.diskContent;
             return (
@@ -704,6 +778,16 @@ export function NotesView() {
               </div>
             );
           })}
+          </div>
+          <button
+            type="button"
+            className="shrink-0 cursor-pointer rounded-md border border-border-soft bg-transparent px-2 py-0.5 text-[12px] text-fg-dim hover:bg-bg hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={onUndo}
+            disabled={!vault}
+            title="Undo the most recent vault edit (journal-backed)"
+          >
+            ↶ Undo
+          </button>
         </div>
 
         {error && (
@@ -713,6 +797,22 @@ export function NotesView() {
               type="button"
               className="cursor-pointer border-none bg-transparent text-inherit"
               onClick={() => setError(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {vaultWarning && (
+          <div className="flex items-start gap-2 whitespace-pre-wrap border-b border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+            <span className="flex-1">
+              <span className="font-semibold">heads up: </span>
+              {vaultWarning}
+            </span>
+            <button
+              type="button"
+              className="cursor-pointer border-none bg-transparent text-inherit opacity-70 hover:opacity-100"
+              onClick={() => setVaultWarning(null)}
+              aria-label="Dismiss warning"
             >
               ×
             </button>

@@ -11,7 +11,7 @@ use rezon_core::agent::{
     cloud::CloudProvider,
     local::LocalProvider,
     run_agent,
-    tools::{register_core_tools, register_search_notes},
+    tools::{register_core_tools, register_search_notes, register_write_note},
     AgentOpts, ChatMessage, ConfirmationGate, Provider, ProviderOpts, ToolRegistry,
 };
 use rezon_core::llm::{resolve_cloud_config, ChatMsg, ChatOpts, LlmState};
@@ -85,6 +85,11 @@ pub fn spawn_agent_run(
     // human-readable error, so the model can recover.
     if let Some(v) = vault {
         register_search_notes(&mut reg, v.search.clone(), v.embed.clone());
+        // `write_note` is paired with `search_notes`: both depend on
+        // a vault being open. Confirmation is enforced inside the
+        // tool, not at registration time, so the user always gets a
+        // prompt before content lands on disk.
+        register_write_note(&mut reg, v.search.clone());
     }
     // User-disabled tools are stripped from the registry so the
     // model never sees them.

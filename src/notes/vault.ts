@@ -42,6 +42,16 @@ export async function renamePath(
   return invoke<void>("vault_rename", { vault, from, to });
 }
 
+export type UndoReport = { path: string; targetId: string };
+
+/// Revert the most recent journaled vault mutation. Errors when
+/// there is nothing to undo. The caller is responsible for refreshing
+/// any open editor tab pointing at the returned path, since the file
+/// on disk has just been replaced behind the editor's back.
+export async function vaultUndo(vault: string): Promise<UndoReport> {
+  return invoke<UndoReport>("vault_undo", { vault });
+}
+
 export type SearchHit = { path: string; snippet: string };
 
 export async function indexOpen(vault: string): Promise<void> {

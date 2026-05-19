@@ -42,11 +42,58 @@ import { RightSidebar } from "./RightSidebar";
 import { NotesView } from "./notes/NotesView";
 import { loadAppMode, saveAppMode, type AppMode } from "./notes/vault";
 
+/// Render a `Tool::preview` string with diff-style line tinting.
+/// `+ ` lines glow green, `- ` lines glow red, anything else stays
+/// default-fg. The first line is treated as the header (rezon's
+/// tools emit `<tool>  <path>` there) and gets a slightly stronger
+/// weight. Matches the TUI colorize_diff helper so behavior is
+/// symmetric across shells.
+function DiffPreview({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const [header, ...rest] = lines;
+  return (
+    <pre className="m-0 max-h-60 overflow-auto rounded-md border border-border-soft bg-bg/40 p-2 font-mono text-[12px] leading-relaxed">
+      {header && (
+        <div className="mb-1 font-semibold text-fg">{header}</div>
+      )}
+      {rest.map((line, i) => {
+        if (line.startsWith("+ ")) {
+          return (
+            <div
+              key={i}
+              className="bg-success/10 text-success"
+            >
+              {line}
+            </div>
+          );
+        }
+        if (line.startsWith("- ")) {
+          return (
+            <div key={i} className="bg-danger/10 text-danger">
+              {line}
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="text-fg-dim">
+            {line}
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
 function ConfirmToolDialog({
   pending,
   onResolve,
 }: {
-  pending: { confirmationId: string; name: string; arguments: string } | null;
+  pending: {
+    confirmationId: string;
+    name: string;
+    arguments: string;
+    preview?: string | null;
+  } | null;
   onResolve: (id: string, approved: boolean) => void;
 }) {
   if (!pending) return null;
@@ -94,14 +141,23 @@ function ConfirmToolDialog({
               </span>
               <code className="font-mono text-[13px]">{pending.name}</code>
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px] uppercase tracking-wider text-fg-dim">
-                Arguments
-              </span>
-              <pre className="m-0 max-h-60 overflow-auto rounded-md border border-border-soft bg-bg/40 p-2 font-mono text-[12px]">
-                {pretty}
-              </pre>
-            </div>
+            {pending.preview ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-fg-dim">
+                  Preview
+                </span>
+                <DiffPreview text={pending.preview} />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] uppercase tracking-wider text-fg-dim">
+                  Arguments
+                </span>
+                <pre className="m-0 max-h-60 overflow-auto rounded-md border border-border-soft bg-bg/40 p-2 font-mono text-[12px]">
+                  {pretty}
+                </pre>
+              </div>
+            )}
             <div className="text-[11px] text-fg-dim">
               Use Settings &rsaquo; Tools to set this tool to "Always" if you
               don't want to be asked again.
@@ -305,7 +361,11 @@ function App() {
     confirmationId: string;
     name: string;
     arguments: string;
+    preview?: string | null;
   } | null>(null);
+  // Latest unresolved-wikilink warning, displayed inline under the
+  // most recent user message and auto-cleared on the next prompt.
+  const [chatWarning, setChatWarning] = useState<string | null>(null);
 
   // Persist provider + per-provider model and base URL on change.
   useEffect(() => {
@@ -523,8 +583,18 @@ function App() {
           confirmationId: string;
           name: string;
           arguments: string;
+          preview?: string | null;
         }>("agent-tool-confirm", (e) => {
           setPendingConfirm(e.payload);
+        }),
+      );
+
+      // Wikilink expansion may surface unresolvable `[[Target]]`
+      // markers. Display the latest warning inline; it clears on
+      // the next user message (see send path below).
+      unlistens.push(
+        await listen<string>("chat-warning", (e) => {
+          setChatWarning(e.payload);
         }),
       );
 
@@ -658,6 +728,11 @@ function App() {
     if (!text || streaming) return;
     if (provider === "local" && !loadedPath) return;
     if (activeCloud && !cloudReady) return;
+
+    // Clear any prior wikilink warning — it was about the previous
+    // turn. The backend re-emits per-turn if the new message has
+    // unresolved markers.
+    setChatWarning(null);
 
     const userMsg: Msg = { role: "user", content: text };
     const newAssistant: Msg = { role: "assistant", content: "" };
@@ -958,6 +1033,23 @@ function App() {
               </div>
             );
           })}
+          {chatWarning && (
+            <div
+              className="mt-1 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12px] text-warning"
+              role="status"
+            >
+              <span className="font-semibold">heads up: </span>
+              {chatWarning}
+              <button
+                type="button"
+                className="float-right cursor-pointer border-none bg-transparent px-1 leading-none text-warning opacity-70 hover:opacity-100"
+                onClick={() => setChatWarning(null)}
+                aria-label="Dismiss warning"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
 
         <form
