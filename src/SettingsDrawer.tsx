@@ -163,7 +163,102 @@ function GeneralPanel({
           conversations error instead, so you notice.
         </small>
       </label>
+      <SamplerControls
+        settings={settings.sampler}
+        onChange={(s) => onChange({ ...settings, sampler: s })}
+      />
     </>
+  );
+}
+
+function SamplerControls({
+  settings,
+  onChange,
+}: {
+  settings: import("./types").SamplerSettings;
+  onChange: (s: import("./types").SamplerSettings) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border-soft p-2.5">
+      <div className="text-[11px] uppercase tracking-wider text-fg-dim">
+        Cloud sampler (applies to cloud providers only)
+      </div>
+      <SamplerNumberField
+        label="Temperature"
+        hint="0–2. Lower is more deterministic; default (≈1) when blank."
+        min={0}
+        max={2}
+        step={0.05}
+        value={settings.temperature}
+        onChange={(v) => onChange({ ...settings, temperature: v })}
+      />
+      <SamplerNumberField
+        label="Top-p"
+        hint="0–1 nucleus cutoff. Default when blank."
+        min={0}
+        max={1}
+        step={0.05}
+        value={settings.topP}
+        onChange={(v) => onChange({ ...settings, topP: v })}
+      />
+      <SamplerNumberField
+        label="Max tokens"
+        hint="Upper bound on response length. Default when blank."
+        min={1}
+        max={1_000_000}
+        step={1}
+        value={settings.maxTokens}
+        onChange={(v) => onChange({ ...settings, maxTokens: v })}
+      />
+    </div>
+  );
+}
+
+function SamplerNumberField({
+  label,
+  hint,
+  min,
+  max,
+  step,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-[12px]">
+      <div className="flex items-center justify-between gap-2">
+        <span>{label}</span>
+        <input
+          type="number"
+          className="w-24 rounded-md border border-border bg-transparent px-2 py-1 text-right font-mono text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          min={min}
+          max={max}
+          step={step}
+          value={value ?? ""}
+          // Empty string → null (provider default). Anything else
+          // parses as a number; falls back to null on NaN so users
+          // can't accidentally save an invalid value.
+          onChange={(e) => {
+            const raw = e.currentTarget.value;
+            if (raw === "") {
+              onChange(null);
+              return;
+            }
+            const n = Number(raw);
+            onChange(Number.isFinite(n) ? n : null);
+          }}
+          placeholder="default"
+        />
+      </div>
+      <small className="text-[11px] text-fg-dim">{hint}</small>
+    </label>
   );
 }
 

@@ -81,10 +81,31 @@ export function loadSettings(): Settings {
           ? parsed.toolsEnabled
           : DEFAULT_SETTINGS.toolsEnabled,
       toolPermissions: validateToolPermissions(parsed.toolPermissions),
+      sampler: validateSampler(parsed.sampler),
     };
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+/// Coerce arbitrary persisted sampler state. Each field must be a
+/// finite number in a sensible range or `null`; anything else
+/// falls back to the default. Defensive against hand-edited
+/// localStorage and against schema drift.
+function validateSampler(raw: unknown): import("./types").SamplerSettings {
+  const def = DEFAULT_SETTINGS.sampler;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return def;
+  const obj = raw as Record<string, unknown>;
+  const num = (v: unknown, lo: number, hi: number): number | null => {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    return v >= lo && v <= hi ? v : null;
+  };
+  return {
+    temperature: num(obj.temperature, 0, 2),
+    topP: num(obj.topP, 0, 1),
+    maxTokens: num(obj.maxTokens, 1, 1_000_000),
+  };
 }
 
 function validateTheme(t: unknown): Theme {

@@ -308,7 +308,7 @@ pub fn read_last_model(config_dir: &Path) -> Option<String> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatOpts {
     pub provider: String,
@@ -318,6 +318,22 @@ pub struct ChatOpts {
     pub base_url: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// Sampler temperature. `None` lets the provider use its
+    /// default (typically ~1.0). Applied only on cloud paths
+    /// today; local llama.cpp uses its own hard-coded sampler
+    /// chain (TODO.md tracks the user-configurable sampler for
+    /// the local path).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Nucleus sampling cutoff. Same `None`-means-provider-default
+    /// semantics.
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// Maximum tokens the provider may emit in the response. Maps
+    /// to OpenAI's `max_completion_tokens` in newer SDKs / models;
+    /// async-openai 0.36 still uses the legacy `max_tokens` field.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -418,10 +434,25 @@ pub async fn chat(
         api_key,
         base_url,
         opts.provider.clone(),
+        SamplerOpts {
+            temperature: opts.temperature,
+            top_p: opts.top_p,
+            max_tokens: opts.max_tokens,
+        },
         cancel,
         sink,
     )
     .await
+}
+
+/// User-tunable sampler parameters. Threaded through `run_cloud_chat`
+/// so the chat path doesn't grow yet another long argument list.
+/// `None` on any field defers to the provider's default.
+#[derive(Debug, Clone, Default)]
+pub struct SamplerOpts {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub max_tokens: Option<u32>,
 }
 
 fn to_openai_messages(
@@ -463,24 +494,45 @@ fn to_openai_messages(
     Ok(out)
 }
 
+// 8 args is over clippy's default of 7. Collapsing into a struct
+// would only push the bag-of-args one layer in and obscure the
+// call site, so we silence rather than gild the lily — same
+// rationale as `spawn_agent_run` in rezon-tui.
+#[allow(clippy::too_many_arguments)]
 async fn run_cloud_chat(
     messages: Vec<ChatMsg>,
     model: String,
     api_key: String,
     base_url: String,
     provider: String,
+    sampler: SamplerOpts,
     cancel: Arc<AtomicBool>,
     sink: Arc<dyn ChatSink>,
 ) -> std::result::Result<String, String> {
     let started = Instant::now();
     let openai_msgs = to_openai_messages(messages)?;
-    let request = CreateChatCompletionRequestArgs::default()
+    let mut builder = CreateChatCompletionRequestArgs::default();
+    builder
         .model(&model)
         .messages(openai_msgs)
         .stream_options(ChatCompletionStreamOptions {
             include_usage: Some(true),
             include_obfuscation: None,
-        })
+        });
+    // Only set sampler fields when the caller supplied one — leaving
+    // them unset on the builder forwards the provider's default
+    // rather than zero-ing them. Sanity-clamp temperature and top_p
+    // to [0,2] / [0,1] to defend against UI bugs sending nonsense.
+    if let Some(t) = sampler.temperature {
+        builder.temperature(t.clamp(0.0, 2.0));
+    }
+    if let Some(p) = sampler.top_p {
+        builder.top_p(p.clamp(0.0, 1.0));
+    }
+    if let Some(n) = sampler.max_tokens {
+        builder.max_tokens(n.max(1));
+    }
+    let request = builder
         .build()
         .map_err(|e| format!("build request: {e}"))?;
 
@@ -1027,8 +1079,7 @@ mod tests {
         let opts = ChatOpts {
             provider: "other".into(),
             model: Some("foo".into()),
-            base_url: None,
-            api_key: None,
+            ..Default::default()
         };
         let err = resolve_cloud_config(&opts).unwrap_err();
         assert!(err.contains("base URL"), "got: {err}");
@@ -1040,7 +1091,8 @@ mod tests {
             provider: "other".into(),
             model: Some("llama3".into()),
             base_url: Some("http://localhost:11434/v1".into()),
-            api_key: None, // empty key allowed for local OpenAI-compat servers
+            // empty key allowed for local OpenAI-compat servers
+            ..Default::default()
         };
         let (key, base, model) = resolve_cloud_config(&opts).unwrap();
         assert_eq!(key, "no-key");
@@ -1052,9 +1104,7 @@ mod tests {
     fn resolve_cloud_config_unknown_provider_errors() {
         let opts = ChatOpts {
             provider: "wat".into(),
-            model: None,
-            base_url: None,
-            api_key: None,
+            ..Default::default()
         };
         let err = resolve_cloud_config(&opts).unwrap_err();
         assert!(err.contains("unknown provider"), "got: {err}");

@@ -143,6 +143,7 @@ impl Repl {
             model: s.model.clone().or_else(|| cli.model.clone()),
             base_url: s.base_url.clone().or_else(|| cli.base_url.clone()),
             api_key: s.api_key.clone().or_else(|| cli.api_key.clone()),
+            ..Default::default()
         }
     }
 

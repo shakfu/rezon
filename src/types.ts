@@ -74,6 +74,16 @@ export type ToolInfo = {
   requiresConfirmation: boolean;
 };
 
+/// Cloud sampler parameters. All optional — a `null`/`undefined`
+/// field defers to the provider's default rather than overriding
+/// it. Only the cloud path consumes these today; the local llama.cpp
+/// sampler is still hard-coded (TODO.md).
+export type SamplerSettings = {
+  temperature: number | null;
+  topP: number | null;
+  maxTokens: number | null;
+};
+
 export type Settings = {
   theme: Theme;
   fontSize: number;
@@ -86,6 +96,8 @@ export type Settings = {
   toolsEnabled: boolean;
   /// Per-tool permission. Tools missing from the map default to "ask".
   toolPermissions: ToolPermissions;
+  /// Cloud sampler tuning. Applies to every cloud chat / agent run.
+  sampler: SamplerSettings;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -97,6 +109,11 @@ export const DEFAULT_SETTINGS: Settings = {
   contextOverflow: "error",
   toolsEnabled: false,
   toolPermissions: {},
+  sampler: {
+    temperature: null,
+    topP: null,
+    maxTokens: null,
+  },
 };
 
 export function toolPermissionFor(

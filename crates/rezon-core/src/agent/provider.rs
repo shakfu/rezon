@@ -25,6 +25,13 @@ pub struct ProviderOpts {
     /// provider use its default.
     pub max_tokens: Option<u32>,
 
+    /// Sampler temperature override. `None` defers to the provider
+    /// default. Only the cloud provider consumes this today.
+    pub temperature: Option<f32>,
+
+    /// Nucleus sampling cutoff. Same `None`-means-default semantics.
+    pub top_p: Option<f32>,
+
     /// Cooperative cancel flag. Polled by the provider's stream
     /// implementation to abort early.
     pub cancel: Arc<AtomicBool>,

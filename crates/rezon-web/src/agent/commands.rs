@@ -89,6 +89,10 @@ pub struct AgentChatOpts {
     /// Hard cap on agent loop iterations. Defaults to 8.
     pub max_steps: Option<usize>,
     pub max_tokens: Option<u32>,
+    /// Cloud sampler tuning. `None` defers to the provider default.
+    /// Mirrors `ChatOpts::temperature` / `top_p` for the agent path.
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
     /// Per-tool permissions resolved on the frontend:
     /// "ask" | "always" | "disable". Tools mapped to "disable" are
     /// filtered out of the registry. The remaining map drives the
@@ -192,6 +196,8 @@ pub async fn agent_chat(
         provider_opts: ProviderOpts {
             model,
             max_tokens: opts.max_tokens,
+            temperature: opts.temperature,
+            top_p: opts.top_p,
             cancel: cancel.clone(),
         },
         max_steps: opts.max_steps.unwrap_or(8),

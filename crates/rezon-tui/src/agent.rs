@@ -103,6 +103,8 @@ pub fn spawn_agent_run(
         provider_opts: ProviderOpts {
             model,
             max_tokens: None,
+            temperature: None,
+            top_p: None,
             cancel: cancel.clone(),
         },
         max_steps,

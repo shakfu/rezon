@@ -184,6 +184,7 @@ async fn run(cli: Cli) -> Result<()> {
         model: cli.model.clone(),
         base_url: cli.base_url.clone(),
         api_key: cli.api_key.clone(),
+        ..Default::default()
     };
 
     // Open + rebuild the FTS index from the loaded store. Failure is

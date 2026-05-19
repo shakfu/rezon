@@ -2,6 +2,7 @@ pub mod agent;
 mod embed;
 mod llm;
 mod search;
+mod secrets;
 mod vault;
 
 use tauri::menu::{
@@ -43,6 +44,9 @@ pub fn run() {
             vault::vault_undo,
             vault::vault_redo,
             vault::vault_journal_recent,
+            secrets::keychain_get,
+            secrets::keychain_set,
+            secrets::keychain_delete,
             search::vault_search,
             search::vault_index_open,
             search::vault_index_touch,

@@ -73,7 +73,13 @@ impl Provider for CloudProvider {
             req.tools(oai_tools);
         }
         if let Some(max) = opts.max_tokens {
-            req.max_tokens(max);
+            req.max_tokens(max.max(1));
+        }
+        if let Some(t) = opts.temperature {
+            req.temperature(t.clamp(0.0, 2.0));
+        }
+        if let Some(p) = opts.top_p {
+            req.top_p(p.clamp(0.0, 1.0));
         }
         let request = req.build().context("build chat request")?;
 

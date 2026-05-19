@@ -66,6 +66,8 @@ async fn run(prompt: String) -> Result<()> {
         provider_opts: ProviderOpts {
             model,
             max_tokens: Some(1024),
+            temperature: None,
+            top_p: None,
             cancel: Arc::new(AtomicBool::new(false)),
         },
         max_steps: 6,

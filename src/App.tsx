@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Tooltip } from "@base-ui/react/tooltip";
 import { ConfirmToolDialog, type PendingConfirm } from "./ConfirmToolDialog";
+import { cloudApiKeyAccount, keychainGet, keychainSet } from "./secrets";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
 import "./App.css";
@@ -206,8 +207,11 @@ function App() {
   const [cloudBaseUrl, setCloudBaseUrl] = useState<Record<string, string>>(
     () => loadCloudBaseUrls(),
   );
-  // Note: API keys are intentionally NOT persisted (security: localStorage
-  // is plaintext). User re-enters for "other" each launch.
+  // Cloud API keys are persisted to the OS keychain (see
+  // `secrets.ts`), not localStorage. Initial mount kicks off a
+  // hydration `useEffect` below that asks the backend for each
+  // provider's stored key; meanwhile the field renders empty so
+  // the user can type one in.
   const [cloudApiKey, setCloudApiKey] = useState<Record<string, string>>({});
   // Tool catalog from the backend; powers the Settings > Tools tab and
   // the toolPermissions map passed to agent_chat.
@@ -507,6 +511,23 @@ function App() {
           }
           return next;
         });
+        // Hydrate cloud API keys from the OS keychain. Done after
+        // the provider list resolves so we only request slots that
+        // actually exist. Errors per-provider are swallowed —
+        // keyring is best-effort; a hostile policy on Linux can
+        // refuse access without preventing usage.
+        const hydrated: Record<string, string> = {};
+        for (const p of list) {
+          try {
+            const v = await keychainGet(cloudApiKeyAccount(p.key));
+            if (v) hydrated[p.key] = v;
+          } catch {
+            /* ignore */
+          }
+        }
+        if (Object.keys(hydrated).length > 0) {
+          setCloudApiKey((prev) => ({ ...hydrated, ...prev }));
+        }
       } catch {
         /* ignore */
       }
@@ -624,6 +645,17 @@ function App() {
       ...history,
     ];
 
+    // Sampler params apply only to cloud paths today (the local
+    // llama.cpp sampler chain is hard-coded — TODO.md tracks
+    // exposing it). Local provider sends are unaffected.
+    const sampler = activeCloud
+      ? {
+          temperature: settings.sampler.temperature ?? undefined,
+          topP: settings.sampler.topP ?? undefined,
+          maxTokens: settings.sampler.maxTokens ?? undefined,
+        }
+      : {};
+
     const opts = activeCloud
       ? activeCloud.userConfigurable
         ? {
@@ -631,8 +663,9 @@ function App() {
             model: activeCloudModel,
             baseUrl: activeBaseUrl,
             apiKey: activeApiKey,
+            ...sampler,
           }
-        : { provider: activeCloud.key, model: activeCloudModel }
+        : { provider: activeCloud.key, model: activeCloudModel, ...sampler }
       : { provider: "local" };
 
     // Tool calling lives on the agent loop. Both cloud and local
@@ -962,6 +995,13 @@ function App() {
         setCloudBaseUrl={setCloudBaseUrl}
         cloudApiKey={cloudApiKey}
         setCloudApiKey={setCloudApiKey}
+        onCloudApiKeyCommit={(key, value) => {
+          // Fire-and-forget: keychain failures are non-fatal (a
+          // hostile Linux policy could deny without us being able
+          // to do anything). The in-memory `cloudApiKey` map is
+          // still authoritative for the current session.
+          keychainSet(cloudApiKeyAccount(key), value).catch(() => {});
+        }}
         modelPath={modelPath}
         setModelPath={setModelPath}
         loadedPath={loadedPath}

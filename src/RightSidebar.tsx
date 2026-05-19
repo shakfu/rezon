@@ -22,6 +22,10 @@ type Props = {
   setCloudApiKey: (
     fn: (prev: Record<string, string>) => Record<string, string>,
   ) => void;
+  /// Called when the API-key input loses focus. Persists to the OS
+  /// keychain via the parent; doing it here on blur (rather than
+  /// onChange) keeps every keystroke from hammering the keychain.
+  onCloudApiKeyCommit: (providerKey: string, value: string) => void;
   // Local model state
   modelPath: string;
   setModelPath: (s: string) => void;
@@ -106,6 +110,7 @@ export function RightSidebar(props: Props) {
     setCloudBaseUrl,
     cloudApiKey,
     setCloudApiKey,
+    onCloudApiKeyCommit,
     modelPath,
     setModelPath,
     loading,
@@ -224,7 +229,10 @@ export function RightSidebar(props: Props) {
                     [activeCloud.key]: e.currentTarget.value,
                   }))
                 }
-                placeholder="API key (optional)"
+                onBlur={(e) =>
+                  onCloudApiKeyCommit(activeCloud.key, e.currentTarget.value)
+                }
+                placeholder="API key (saved to keychain)"
               />
             </div>
           ) : (
