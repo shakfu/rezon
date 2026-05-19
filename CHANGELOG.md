@@ -177,6 +177,68 @@ All notable changes to this project. Format loosely follows
     `journal::skip_git_sentinel_suppresses_commit`. Total: 53.
 
 ### Changed
+- **Undo consolidated into a single core primitive**
+  (`crates/rezon-core/src/journal.rs::undo_last_op`). Returns
+  `Option<UndoOutcome { target_id, tool, path, was_deletion,
+  journal }>`; `None` when there's nothing to undo (was an `Err`
+  string in three different callers before). The TUI `cmd_undo`
+  (86 → 36 lines), Tauri `vault_undo` (44 → 13), and agent
+  `UndoNote::dispatch` (58 → 24) all delegate. Net ~−180 lines of
+  call-site duplication, +96 lines in the core helper. Side fix:
+  the TUI's old inline `cmd_undo` was the only caller not running
+  `vault_index_touch` after the revert; the consolidated path now
+  does, so search results stay consistent across all three undo
+  entry points. The agent tool's JSON return gained `reverted_tool`
+  and `was_deletion` fields in the process.
+- **`make test` runs clippy** (`-D warnings`) after the unit-test
+  pass. Folded the previously-separate `lint` target's check into
+  `test` so every test run gates lint regressions too. Caught
+  during the rollout: `doc_list_item_without_indentation` in
+  `journal::Op` and `repl::colorize_diff` (doc prose rewritten),
+  `needless_range_loop` ×2 in `llm::run_*_with_cache`'s chunked
+  decode (switched to `for (j, tok) in to_add[i..end].iter().
+  enumerate()`), `collapsible_match` in
+  `expand_agent_messages`. All fixed; lint gate green.
+- **Full vault-mutation journaling** in the Tauri surface
+  (`crates/rezon-web/src/vault.rs`). `vault_create` / `vault_delete`
+  / `vault_rename` now write to the journal alongside `vault_write`:
+  - `vault_create` → `Op::Write { before: None, after: Some(b"") }`
+  - `vault_delete` (file) → `Op::Write { before: Some(content),
+    after: None }`. Pre-image captured before the unlink fires.
+  - `vault_delete` (dir) → walks the tree first via the new
+    `snapshot_dir`, snapshots every regular file's bytes, then
+    `record_write` per-file after `remove_dir_all`. `/undo` walks
+    these back one at a time.
+  - `vault_rename` (file) → two journal entries: delete on `from`,
+    create on `to`. Two undos reverse the rename; the chain is
+    intact.
+  - `vault_mkdir` left un-journaled (empty directories have no
+    content; they surface in git as soon as a file lands inside).
+  Shared `relativize(vault, path)` helper replaces the inline
+  strip-prefix that lived in `vault_write` only. All four mutators
+  emit `vault-warning` Tauri events on git-hook / journal
+  failures.
+- **Stale direct deps dropped from `crates/rezon-web/Cargo.toml`**.
+  `futures`, `thiserror`, `reqwest`, `rusqlite`, `sqlite-vec`,
+  `notify`, `sha2`, `libc` removed entirely (transitive through
+  `rezon-core`). `llama-cpp-2`, `encoding_rs`, `async-openai`
+  moved to `[dev-dependencies]` (only `examples/` programs use
+  them directly). Production build graph shrank to just
+  `rezon-core` + the Tauri stack + `async-trait` (still used by
+  the Tauri-side `ConfirmationGate` impl).
+- **`ConfirmToolDialog` + `DiffPreview` extracted from `App.tsx`**
+  into a new `src/ConfirmToolDialog.tsx`. App.tsx went from 1,156
+  to 1,003 lines (−153). Public exports: `ConfirmToolDialog`,
+  `DiffPreview`, `PendingConfirm` type. App.tsx now imports the
+  type and uses it for both the `useState` slot and the
+  `agent-tool-confirm` listener payload — no more inline-shape
+  duplication.
+- **Dead Phase-2 stub removed from `agent::loop_`**. Deleted the
+  unreachable `if tool.requires_confirmation() { eprintln!("phase-2
+  dispatches without prompting") }` block in `dispatch_one` (the
+  gate runs in the main loop before this point) and rewrote the
+  file header to describe the actual contract instead of the
+  Phase-2 caveats.
 - **Fresh conversation per launch**. After `Store::load_or_new`, if
   the active conversation has any user turns, the TUI pushes a new
   empty conversation and switches to it; the previous one stays in
