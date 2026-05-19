@@ -65,51 +65,21 @@ pub fn vault_write(
 }
 
 /// Undo the most-recent journaled change to the vault. Returns
-/// `(path, target_id)` describing what was reverted, or an error
-/// when there's nothing to undo.
+/// `{ path, targetId }` describing what was reverted, or an error
+/// when there's nothing to undo. Git/journal warnings (e.g. a
+/// pre-commit hook rejected the auto-commit recording the undo)
+/// emit on the `vault-warning` event so the UI can toast them
+/// without changing this command's return shape.
 #[tauri::command]
 pub fn vault_undo(app: AppHandle, vault: String) -> Result<UndoReport, String> {
-    let target = journal::last_undoable(&vault)?
+    let out = journal::undo_last_op(&vault)?
         .ok_or_else(|| "nothing to undo".to_string())?;
-    let (target_id, target_path, before_sha) = match target.op {
-        journal::Op::Write { before_sha, .. } => (target.id, target.path, before_sha),
-        _ => return Err("non-reversible journal entry".into()),
-    };
-    let abs = Path::new(&vault).join(&target_path);
-    let current = std::fs::read(&abs).ok();
-    match before_sha {
-        Some(sha) => {
-            let bytes = journal::read_blob(&vault, &sha)?;
-            std::fs::write(&abs, &bytes)
-                .map_err(|e| format!("restore {}: {e}", abs.display()))?;
-        }
-        None => {
-            if abs.exists() {
-                std::fs::remove_file(&abs)
-                    .map_err(|e| format!("delete {}: {e}", abs.display()))?;
-            }
-        }
-    }
-    let new_after = std::fs::read(&abs).ok();
-    match journal::record_undo(
-        &vault,
-        &target_path,
-        &target_id,
-        current.as_deref(),
-        new_after.as_deref(),
-    ) {
-        Ok(out) => {
-            if let Some(w) = out.git_warning {
-                let _ = app.emit("vault-warning", format!("git: {w}"));
-            }
-        }
-        Err(e) => {
-            let _ = app.emit("vault-warning", format!("journal: {e}"));
-        }
+    if let Some(w) = out.journal.git_warning {
+        let _ = app.emit("vault-warning", format!("git: {w}"));
     }
     Ok(UndoReport {
-        path: target_path,
-        target_id,
+        path: out.path,
+        target_id: out.target_id,
     })
 }
 

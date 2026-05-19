@@ -215,6 +215,99 @@ pub fn read_blob(vault: &str, sha: &str) -> Result<Vec<u8>, String> {
     fs::read(&p).map_err(|e| format!("read blob {sha}: {e}"))
 }
 
+/// Summary of a successful `undo_last_op` call.
+#[derive(Debug, Clone)]
+pub struct UndoOutcome {
+    /// Id of the entry that was reverted.
+    pub target_id: String,
+    /// Tool name from the reverted entry (e.g. `"write_note"`,
+    /// `"manual_edit"`, `"vault_delete"`). Useful for UI strings
+    /// like "undid X on Y".
+    pub tool: String,
+    /// Vault-relative path of the affected file.
+    pub path: String,
+    /// True when the undo deleted the file (the target was a
+    /// creation, so the restored state is "absent"). Callers that
+    /// own a file tree / open-tabs list should refresh.
+    pub was_deletion: bool,
+    /// `JournalOutcome` for the recorded undo entry — carries
+    /// `git_committed` and any `git_warning`. Read these to surface
+    /// hook failures or git-skip cases to the user.
+    pub journal: JournalOutcome,
+}
+
+/// Revert the most-recent journaled mutation. Restores the file from
+/// the `before_sha` blob (or deletes it when the target was a
+/// creation), then records a new `Op::Undo` entry so subsequent
+/// undos walk the chain instead of re-undoing the same entry. The
+/// caller is responsible for any index hygiene (`vault_index_touch`)
+/// since `journal` doesn't depend on `search`.
+///
+/// Returns `Ok(None)` when there is nothing to undo.
+pub fn undo_last_op(vault: &str) -> Result<Option<UndoOutcome>, String> {
+    let target = match last_undoable(vault)? {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let (target_id, tool, target_path, before_sha) = match target.op {
+        Op::Write { before_sha, .. } => (target.id, target.tool, target.path, before_sha),
+        // `last_undoable` filters Undo entries, so this branch is
+        // unreachable in practice; surface the invariant clearly
+        // rather than panic.
+        _ => {
+            return Err("internal: last_undoable returned a non-Write entry".into());
+        }
+    };
+
+    let abs = PathBuf::from(vault).join(&target_path);
+    // Snapshot the current on-disk content for the undo entry's
+    // `before` field. Missing is fine (the file may already be
+    // gone if a manual edit deleted it out-of-band).
+    let current = fs::read(&abs).ok();
+
+    let was_deletion = before_sha.is_none();
+    match &before_sha {
+        Some(sha) => {
+            let bytes = read_blob(vault, sha)?;
+            if let Some(parent) = abs.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            }
+            fs::write(&abs, &bytes)
+                .map_err(|e| format!("restore {}: {e}", abs.display()))?;
+        }
+        None => {
+            // Target was a creation; undo deletes the file. Missing
+            // is fine — someone may have already removed it.
+            if abs.exists() {
+                fs::remove_file(&abs)
+                    .map_err(|e| format!("delete {}: {e}", abs.display()))?;
+            }
+        }
+    }
+
+    // Re-read after the restore so the undo entry's `after_sha`
+    // matches the on-disk state byte-for-byte. Deduplicates with
+    // existing blobs.
+    let new_after = fs::read(&abs).ok();
+
+    let journal = record_undo(
+        vault,
+        &target_path,
+        &target_id,
+        current.as_deref(),
+        new_after.as_deref(),
+    )?;
+
+    Ok(Some(UndoOutcome {
+        target_id,
+        tool,
+        path: target_path,
+        was_deletion,
+        journal,
+    }))
+}
+
 // ---- internals ---------------------------------------------------------
 
 fn ensure_history_dirs(vault_root: &Path) -> Result<(), String> {
@@ -542,6 +635,37 @@ mod tests {
         let dropped = gc(dir.path(), 10).unwrap();
         assert_eq!(dropped, 0);
         assert_eq!(read_log(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn undo_last_op_restores_prior_content() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path().to_string_lossy().to_string();
+        // Two writes: undo_last_op should revert the second one
+        // and leave the first content on disk.
+        fs::write(dir.path().join("X.md"), b"v1").unwrap();
+        record_write(&vault, "t", "X.md", None, Some(b"v1")).unwrap();
+        fs::write(dir.path().join("X.md"), b"v2").unwrap();
+        record_write(&vault, "t", "X.md", Some(b"v1"), Some(b"v2")).unwrap();
+
+        let out = undo_last_op(&vault).unwrap().expect("had an undoable");
+        assert_eq!(out.path, "X.md");
+        assert_eq!(out.tool, "t");
+        assert!(!out.was_deletion);
+        assert_eq!(fs::read(dir.path().join("X.md")).unwrap(), b"v1");
+        // The undo entry was recorded — so a second undo finds the
+        // *first* write (the chain walks back, skipping undone
+        // entries).
+        let second = undo_last_op(&vault).unwrap().expect("had a first write");
+        assert!(second.was_deletion);
+        assert!(!dir.path().join("X.md").exists());
+    }
+
+    #[test]
+    fn undo_last_op_returns_none_when_nothing_to_undo() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path().to_string_lossy().to_string();
+        assert!(undo_last_op(&vault).unwrap().is_none());
     }
 
     #[test]

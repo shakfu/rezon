@@ -593,61 +593,31 @@ impl Tool for UndoNote {
     }
 
     async fn dispatch(&self, _args: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        let vault = self.search.active_vault().ok_or_else(|| {
-            ToolError::Argument("no vault is open".into())
-        })?;
-        let target = journal::last_undoable(&vault)
+        let vault = self
+            .search
+            .active_vault()
+            .ok_or_else(|| ToolError::Argument("no vault is open".into()))?;
+        let out = journal::undo_last_op(&vault)
             .map_err(|e| ToolError::Runtime(anyhow::anyhow!(e)))?
             .ok_or_else(|| ToolError::Argument("nothing to undo".into()))?;
-        let (target_id, target_path, before_sha, after_sha) = match target.op {
-            journal::Op::Write { before_sha, after_sha } => {
-                (target.id, target.path, before_sha, after_sha)
-            }
-            _ => return Err(ToolError::Argument("non-reversible journal entry".into())),
-        };
-
-        let abs = Path::new(&vault).join(&target_path);
-        // Current on-disk content becomes the "before" of the undo
-        // entry — i.e. the redo can reverse this undo.
-        let current = std::fs::read(&abs).ok();
-
-        match before_sha {
-            Some(sha) => {
-                let bytes = journal::read_blob(&vault, &sha)
-                    .map_err(|e| ToolError::Runtime(anyhow::anyhow!(e)))?;
-                std::fs::write(&abs, &bytes)
-                    .map_err(|e| ToolError::Runtime(anyhow::anyhow!(format!("restore {}: {e}", abs.display()))))?;
-            }
-            None => {
-                // Target was a creation; undo deletes the file.
-                if abs.exists() {
-                    std::fs::remove_file(&abs).map_err(|e| {
-                        ToolError::Runtime(anyhow::anyhow!(format!("delete {}: {e}", abs.display())))
-                    })?;
-                }
-            }
-        }
+        // Keep the FTS index in sync — journal::undo_last_op
+        // deliberately doesn't depend on search, so this is the
+        // tool's job. Best-effort: a stale entry just means the
+        // next `search_notes` call still hits the in-memory hit.
+        let abs = Path::new(&vault).join(&out.path);
         let _ = vault_index_touch(&self.search, &vault, &abs.to_string_lossy());
-
-        let undo_before = current;
-        // After the undo, the file matches the original `before_sha`
-        // content (or is gone). Re-read for the journal's `after`
-        // bookkeeping so blobs stay dedup'd.
-        let undo_after = std::fs::read(&abs).ok();
-        let journaled = journal::record_undo(
-            &vault,
-            &target_path,
-            &target_id,
-            undo_before.as_deref(),
-            undo_after.as_deref(),
-        );
 
         Ok(json!({
             "vault": vault,
-            "path": target_path,
-            "target_id": target_id,
-            "had_after_sha": after_sha.is_some(),
-            "journal": journal_report(journaled),
+            "path": out.path,
+            "target_id": out.target_id,
+            "reverted_tool": out.tool,
+            "was_deletion": out.was_deletion,
+            "journal": {
+                "entry_id": out.journal.entry.id,
+                "git_committed": out.journal.git_committed,
+                "warning": out.journal.git_warning,
+            },
         }))
     }
 }

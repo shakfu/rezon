@@ -1852,81 +1852,36 @@ impl Repl {
             );
             return;
         };
-        let target = match rezon_core::journal::last_undoable(&vault) {
-            Ok(Some(t)) => t,
-            Ok(None) => {
-                println!(
-                    "{meta}nothing to undo{reset}",
-                    meta = C_META,
-                    reset = C_RESET,
+        match rezon_core::journal::undo_last_op(&vault) {
+            Ok(None) => println!(
+                "{meta}nothing to undo{reset}",
+                meta = C_META,
+                reset = C_RESET,
+            ),
+            Ok(Some(out)) => {
+                // Keep the search index aligned with the on-disk
+                // state after the revert — journal doesn't depend
+                // on search, so the touch is the shell's job.
+                let abs = std::path::Path::new(&vault).join(&out.path);
+                let _ = rezon_core::search::vault_index_touch(
+                    &self.vault.search,
+                    &vault,
+                    &abs.to_string_lossy(),
                 );
-                return;
-            }
-            Err(e) => {
-                println!("{err}/undo: {e}{reset}", err = C_ERR, reset = C_RESET);
-                return;
-            }
-        };
-        let (target_id, target_path, before_sha) = match target.op {
-            rezon_core::journal::Op::Write { before_sha, .. } => {
-                (target.id, target.path, before_sha)
-            }
-            _ => {
-                println!(
-                    "{err}/undo: non-reversible entry{reset}",
-                    err = C_ERR,
-                    reset = C_RESET,
-                );
-                return;
-            }
-        };
-        let abs = std::path::Path::new(&vault).join(&target_path);
-        let current = std::fs::read(&abs).ok();
-        let restore_result = match &before_sha {
-            Some(sha) => rezon_core::journal::read_blob(&vault, sha)
-                .and_then(|bytes| std::fs::write(&abs, &bytes).map_err(|e| e.to_string())),
-            None => {
-                if abs.exists() {
-                    std::fs::remove_file(&abs).map_err(|e| e.to_string())
-                } else {
-                    Ok(())
-                }
-            }
-        };
-        if let Err(e) = restore_result {
-            println!("{err}/undo restore: {e}{reset}", err = C_ERR, reset = C_RESET);
-            return;
-        }
-        let new_after = std::fs::read(&abs).ok();
-        let outcome = rezon_core::journal::record_undo(
-            &vault,
-            &target_path,
-            &target_id,
-            current.as_deref(),
-            new_after.as_deref(),
-        );
-        match outcome {
-            Ok(j) => {
-                let git_suffix = if j.git_committed { " (git committed)" } else { "" };
+                let git_suffix = if out.journal.git_committed { " (git committed)" } else { "" };
                 println!(
                     "{meta}undid {tool} on {path}{git}{reset}",
                     meta = C_META,
                     reset = C_RESET,
-                    tool = target.tool,
-                    path = target_path,
+                    tool = out.tool,
+                    path = out.path,
                     git = git_suffix,
                 );
-                if let Some(w) = j.git_warning {
+                if let Some(w) = out.journal.git_warning {
                     println!("{meta}  git warning: {w}{reset}", meta = C_META, reset = C_RESET);
                 }
             }
-            Err(e) => {
-                println!(
-                    "{err}/undo journaled poorly: {e}{reset}",
-                    err = C_ERR,
-                    reset = C_RESET,
-                );
-            }
+            Err(e) => println!("{err}/undo: {e}{reset}", err = C_ERR, reset = C_RESET),
         }
     }
 
