@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri --config crates/rezon-web/tauri.conf.json"
+    "tauri": "tauri"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
