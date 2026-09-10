@@ -25,7 +25,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 # Nothing in later releases replaces it, so local-model tool calling
 # does not build past 0.1.146.
 #
-# The `=` on the -sys crate is load-bearing. llama-cpp-2 0.1.146 asks
+# The `=` on the -sys crate is structural. llama-cpp-2 0.1.146 asks
 # for `llama-cpp-sys-2 = "0.1.146"`, a caret range that happily
 # resolves to 0.1.154 -- whose FFI no longer defines the
 # `llama_rs_*_oaicompat` symbols 0.1.146 calls. Without this pin a bare

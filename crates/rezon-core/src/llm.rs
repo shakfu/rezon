@@ -1388,7 +1388,7 @@ mod key_resolution_tests {
 
     #[test]
     fn keychain_wins_over_environment() {
-        // The load-bearing rule. A packaged GUI never runs a shell
+        // The structural rule. A packaged GUI never runs a shell
         // profile, so the keychain has to be reachable ahead of the
         // environment or an installed build cannot be given a key.
         std::env::set_var(EV, "from-env");
