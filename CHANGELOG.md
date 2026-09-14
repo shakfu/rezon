@@ -5,6 +5,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 ## [Unreleased]
 
 ### Security
+
 - **Confirmation floor.** `Tool::requires_confirmation()` was never consulted; policy came entirely from a frontend-supplied map, so anything able to call `agent_chat` could auto-approve `shell_exec`. The rule now lives in `agent::confirm::decide` and only a backend-recorded grant clears the floor. `"disable"` still honoured at face value. 12-row decision table under test.
 
 - **Vault symlink escape.** `vault::within` compared lexically, so a symlink inside the vault pointing out of it passed and `fs::write` followed. `resolve_path` walks the path resolving symlinks as it goes — forwards, so `..` after a link lands where the kernel puts it, not where string-cancellation would. Root canonicalized too (a macOS home is usually itself a symlink). Links staying inside still work.
@@ -16,6 +17,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - **`web_fetch` stops at cross-host redirects**, returning the 3xx with `redirectedTo`. Same-host hops still follow. Chasing them fetched a destination the user never approved.
 
 ### Added
+
 - **Agent test doubles** (`agent/testing.rs`, `cfg(test)`): `ScriptedProvider`, `RecordingSink`, `ScriptedGate`, `FakeTool` — drive `run_agent` with no model, network, or GGUF.
 
 - **`.env` loading** (`core/dotenv.rs`), both shells: cwd-upward, then `<app config dir>/.env` for packaged builds. Exported variables win over both.
@@ -35,6 +37,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - **README**: agent-tools table, confirmation policy, API keys.
 
 ### Changed
+
 - **`resolve_cloud_config` deduplicated** — `rezon-web` carried a byte-identical copy. Core's now takes `impl Into<CloudConfigInput<'a>>`, so call sites are unchanged.
 
 - **Conversation persistence debounced** (400 ms). It ran per streamed token, each one a `JSON.stringify` over the whole conversation set plus a synchronous write. Flushes at end-of-turn, `beforeunload`, unmount.
@@ -52,6 +55,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - **`shell_exec` timeout is a field** (`Default` = 60s) so the overrun path is testable in milliseconds.
 
 ### Fixed
+
 - **`make test` was red on `main`** — two `useless_borrows_in_formatting` errors, one in each copy of the duplicated resolver.
 
 - **Mid-stream provider errors discarded the partial turn.** `run_agent` bailed with `?`, dropping content already on screen and leaving `messages` without the assistant turn, so the next request disagreed with the display. Now assembles the partial turn, emits `AgentEvent::Error`, then returns.
@@ -65,11 +69,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - **Vault containment errors** now name the resolved path, not just the literal one — which read as nonsense for a symlink.
 
 ### Removed
+
 - Unreachable agent scaffolding: `ToolError::Denied`, `ToolError::Cancelled`, `ToolResult`, `AgentEvent::ToolConfirm`, `ToolContext.workdir`. None caught by `-D warnings`, all being `pub`.
 
 - `keychain_get`, replaced by `keychain_has`.
 
 ### Added
+
 - **Vault redo** (`crates/rezon-core/src/journal.rs::redo_last_op`). Reapplies the most-recent `Op::Undo`: restores its `before_sha` content (the disk state immediately before the undo ran) and records a fresh `Op::Write` tagged `tool: "redo"`. No new `Op` variant — a tagged write keeps the chain linear, so `undo→redo→ undo→redo` cycles cleanly and a fresh write between undo and redo invalidates the redo stack (text-editor convention). Surface in all three shells: `/redo` TUI command, `vault_redo` Tauri command returning `RedoReport { path, targetUndoId, wasCreation }`, `↷ Redo` button in the NotesView editor toolbar. Three new tests cover round-trip, intervening-write invalidation, and the deletion-undo redo path.
 
 - **Vault history panel** (`src/notes/JournalPanel.tsx`). Modal dialog backed by a new `vault_journal_recent(vault, limit?)` Tauri command (default 100 rows, clamped 1..=1000) over
@@ -88,7 +94,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **Vault-write agent tools** (`crates/rezon-core/src/agent/tools/write_note.rs`): `write_note(path, content, overwrite=false)`, `append_note(path, content, create_if_missing=false)`, `edit_note(path, find, replace)`, `undo_note()`. All four gate on user confirmation, path-normalize (strip leading `/`, reject `..`, auto-append `.md`), call `vault_index_touch` so changes are searchable immediately, and report the journal outcome (entry id + git_committed + warning?) in their return payload. `edit_note`'s `find` must match exactly once — 0 or N≥2 matches error with a hint to pass a longer / more specific snippet. Registered together via `register_write_note(reg, search)` alongside `search_notes` when a vault is open.
 
-- **`Tool::preview` method** (`crates/rezon-core/src/agent/tool.rs`). Optional `fn preview(&self, args: &Value) -> Option<String>` returning a diff-shaped string (`+ ` add lines, `- ` remove lines, anything else context). Agent loop computes the preview once per call from the registry + parsed args, then passes `Option<&str>` into `ConfirmationGate::ask`. TUI prompt and Tauri `agent-tool-confirm` event both surface it; UIs render the preview in place of raw arguments JSON when present. `WriteNote`/`AppendNote`/`EditNote`/ `UndoNote` all override it.
+- **`Tool::preview` method** (`crates/rezon-core/src/agent/tool.rs`). Optional `fn preview(&self, args: &Value) -> Option<String>` returning a diff-shaped string (`+` add lines, `-` remove lines, anything else context). Agent loop computes the preview once per call from the registry + parsed args, then passes `Option<&str>` into `ConfirmationGate::ask`. TUI prompt and Tauri `agent-tool-confirm` event both surface it; UIs render the preview in place of raw arguments JSON when present. `WriteNote`/`AppendNote`/`EditNote`/ `UndoNote` all override it.
 
 - **Edit journal + git versioning** (`crates/rezon-core/src/journal.rs`). Append-only `<vault>/.rezon-history/log.jsonl` records every mutation (write / undo) with sha256 before+after pointers; content snapshots live deduped in `<vault>/.rezon-history/blobs/<sha>`. After each successful record, opportunistic `git add <file> .gitignore && git commit -q -m "rezon: <tool> <rel_path>"` against the vault's git repo (auto-`git init`'d if missing). `.rezon-history/` is added to `.gitignore` on first write so the journal stays out of the user's git log. Hook + signing config respected; failures are non-fatal and surface via `JournalOutcome::git_warning`. `last_undoable(vault)` walks the log skipping any entry already targeted by a subsequent `Op::Undo`. Eight unit tests covering record, dedup, gitignore idempotency, GC, and skip-git.
 
@@ -106,7 +112,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **`last_local_model` auto-load**. On startup, when provider is `local` and neither `--gguf` nor `--model <path>` was passed, the TUI falls back to `rezon_core::llm::read_last_model(<config_dir>)` (the same helper the web app already used). Every successful local load — at startup, via `/load`, or via the `/model` picker — calls `persist_last_model` so the next launch resumes the same GGUF.
 
-- **Diff-preview rendering in the confirmation surface**. The TUI's `prompt_yes_no` runs the preview through `colorize_diff` (`+ ` lines green, `- ` red) and lets the y/N prompt sit right below. Frontend (`src/App.tsx`) gains a `DiffPreview` component that renders the same convention in the `ConfirmToolDialog` modal — `bg-success/10 text-success` for `+ `, `bg-danger/10 text-danger` for `- `, monospace block matching the existing argument-render styling. New `--color-success` / `--color-warning` CSS variables (dark + light), surfaced as Tailwind tokens.
+- **Diff-preview rendering in the confirmation surface**. The TUI's `prompt_yes_no` runs the preview through `colorize_diff` (`+` lines green, `-` red) and lets the y/N prompt sit right below. Frontend (`src/App.tsx`) gains a `DiffPreview` component that renders the same convention in the `ConfirmToolDialog` modal — `bg-success/10 text-success` for `+ `, `bg-danger/10 text-danger` for `- `, monospace block matching the existing argument-render styling. New `--color-success` / `--color-warning` CSS variables (dark + light), surfaced as Tailwind tokens.
 
 - **`chat-warning` banner in the chat tab**. `src/App.tsx` listens for the Tauri event emitted by `crates/rezon-web/src/llm.rs::chat` (and `agent::commands::agent_chat`) when wikilink expansion finds unresolvable targets; renders as a dismissable yellow banner under the message list, clears automatically when the next message is sent.
 
@@ -119,6 +125,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
   - `rezon-core` +12: `wikilink::scan_*`, `wikilink::expand_*`, `write_note::normalize_rel_*`, `write_note::render_preview_*`, `write_note::*_preview_*`, `journal::record_write_*`, `journal::ensure_gitignore_is_idempotent`, `journal::blob_dedup_on_identical_content`, `journal::last_undoable_*`, `journal::gc_*`, `journal::skip_git_sentinel_suppresses_commit`. Total: 53.
 
 ### Changed
+
 - **Undo consolidated into a single core primitive** (`crates/rezon-core/src/journal.rs::undo_last_op`). Returns `Option<UndoOutcome { target_id, tool, path, was_deletion, journal }>`; `None` when there's nothing to undo (was an `Err` string in three different callers before). The TUI `cmd_undo` (86 → 36 lines), Tauri `vault_undo` (44 → 13), and agent `UndoNote::dispatch` (58 → 24) all delegate. Net ~−180 lines of call-site duplication, +96 lines in the core helper. Side fix: the TUI's old inline `cmd_undo` was the only caller not running `vault_index_touch` after the revert; the consolidated path now does, so search results stay consistent across all three undo entry points. The agent tool's JSON return gained `reverted_tool` and `was_deletion` fields in the process.
 
 - **`make test` runs clippy** (`-D warnings`) after the unit-test pass. Folded the previously-separate `lint` target's check into `test` so every test run gates lint regressions too. Caught during the rollout: `doc_list_item_without_indentation` in `journal::Op` and `repl::colorize_diff` (doc prose rewritten), `needless_range_loop` ×2 in `llm::run_*_with_cache`'s chunked decode (switched to `for (j, tok) in to_add[i..end].iter(). enumerate()`), `collapsible_match` in `expand_agent_messages`. All fixed; lint gate green.
@@ -154,6 +161,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - **`store::config_dir()` is now `pub`** so the wizard and the agent-tool path can compute defaults relative to the same dir `Store` uses.
 
 ### Fixed
+
 - **Crash on first-turn chat with a long conversation history** (`GGML_ASSERT(n_tokens_all <= cparams.n_batch) failed`). `crates/rezon-core/src/llm.rs::run_chat_with_cache` and `run_agent_with_cache` previously called `ctx.decode(&mut batch)` with the entire `to_add` slice in one go. With `n_batch = 2048`, any rendered prompt over ~2048 tokens (trivial for a 19-message history) tripped the assert and aborted the process. Both paths now chunk `to_add` into `ctx.n_batch()`-sized slices and decode each in turn; the `logits=true` flag is set only on the prompt's final token of the final chunk.
 
 - **`/models` no longer asks for provider first** when called with no argument — defaults to the current effective provider (per the user's mental model of "show models for the thing I'm using now"). Explicit `/models <key>` still works for browsing a different provider's catalog.
@@ -246,6 +254,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
   - `too_many_arguments` on `tui::agent::spawn_agent_run` — `#[allow]`; collapsing into a struct would only push the bag-of-args one layer in.
 
 ### Changed
+
 - **Workspace refactor.** Rust code split into a 3-crate Cargo workspace under `crates/`:
 
   - `rezon-core` — provider-agnostic backend: chat (local llama.cpp + OpenAI-compatible cloud via `async-openai`), agent loop, tools (including `search_notes`), vault file ops, FTS5 + sqlite-vec search index, embedding worker + background catch-up loop. Zero Tauri references.
@@ -279,6 +288,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - `SearchState::close_vault(path)` added in core so the TUI's `/vault close` actually drops the per-vault index + stops its file watcher (the GUI doesn't yet surface this).
 
 ### Fixed
+
 - `make dev` / `make build` continue to work after the workspace refactor via the `--config $(TAURI_CONF)` flag passed to the Tauri CLI.
 
 - **Markdown re-render row-count went stale on terminal resize.** `wait_for_turn` now captures `terminal_size()` into `stream_width: Option<u16>` on the first streamed `Token` and passes it into `rerender_markdown`. The visible rows were laid out against that width; re-reading the width at `Done` time after a mid-stream resize used to over- or under-clear and leak stale rows.
@@ -298,6 +308,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 ## [Older entries]
 
 ### Changed
+
 - Migrated all headless-component usage from Radix (`@radix-ui/react-dialog`, `@radix-ui/react-alert-dialog`, `@radix-ui/react-tooltip`) to [Base UI](https://base-ui.com) (`@base-ui/react@1.4.1`), the consolidation effort by the same authors. Single dep, consistent API. Component name shifts: Radix `Overlay` → Base UI `Backdrop`; `Content` → `Popup`; Tooltip needs an extra `Positioner` wrapper between `Portal` and `Popup`. `Tooltip.Provider` props renamed (`delayDuration` → `delay`, `skipDelayDuration` → `timeout`). `Tooltip.Trigger` no longer needs `asChild` — it renders a `<button>` itself, so `className`/`onClick` go directly on the trigger.
 
 - Provider and Theme native `<select>` elements replaced with Base UI `Select` for visual consistency with the rest of the themed/Base-UI-styled UI (no more OS-default chevron jumping out against the rest of the app). New shared wrapper at `src/Select.tsx` used by both the right-sidebar Provider field and the SettingsDrawer Theme field; takes `{ value, label }` items and a string `onValueChange`.
@@ -307,11 +318,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - Adopted Tailwind CSS v4 via `@tailwindcss/vite`. Component styling migrated from hand-rolled CSS classes (`rs-`, `conv-`, `msg-`, etc.) to Tailwind utility classes inline in JSX. The CSS-variables theming is preserved and surfaced as Tailwind color tokens via `@theme inline { --color-bg: var(--bg); ... }`, so utilities like `bg-bg` / `text-fg` / `border-border` automatically follow `[data-theme="..."]` switches without needing the `dark:` variant. `App.css` shrank to roughly: theme variables, markdown-content rules (`.md p`, `.md h1`...) that target generated HTML, code-block wrapper, and Radix `data-state` keyframes.
 
 ### Fixed
+
 - AlertDialog / SettingsDrawer flashed in the top-left quadrant for one animation cycle before settling in the center after the Tailwind migration. Cause: Tailwind v4 centers via the modern `translate:` property (`-translate-x-1/2 -translate-y-1/2`), but the dialog pop-in/out keyframes wrote to the legacy `transform: translate(...)`. The two properties compose additively, double-translating the dialog off-center while the animation ran. Keyframes now animate only `scale` + `opacity`, leaving translation entirely to Tailwind.
 
 - Crash on app close inside `__cxa_finalize` → `ggml_metal_device_free` → `GGML_ASSERT([rsets->data count] == 0) failed`. Cause: the worker thread refactor for KV-cache reuse stored only the `mpsc::Sender` in `LoadedHandle` and discarded the `JoinHandle`, so on `RunEvent::Exit` we'd close the channel and immediately return — the worker (and its `LlamaContext`) could still be alive when C++ static destructors ran on the main thread, leaving live resource sets on the metal device. Fix: `LoadedHandle` now stores `Option<JoinHandle>` and its `Drop` impl closes the channel and joins the worker before returning. `LlmState::shutdown` also flips the cancel flag so an in-flight chat aborts immediately rather than running to `MAX_NEW_TOKENS`. Same join-on-drop also runs on model swap, so the previous model's worker is fully torn down before the new one takes over.
 
 ### Added
+
 - Multiple conversations with a left sidebar. Conversations have their own title, system prompt, message history, and timestamps. Sorted most-recent first; rename inline (pencil icon) and delete (trash icon, confirms). All persisted to `localStorage` along with the currently selected conversation id; conversation titles are auto-derived from the first user message.
 
 - Editable per-conversation system prompt in the right sidebar. New conversations seed from `settings.defaultSystemPrompt`.
@@ -329,6 +342,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - Better banner / error states. Load errors render in a dedicated banner with a dismiss button; chat errors render as a distinct error-styled assistant bubble (monospace, muted-red background) instead of mixing with normal markdown content.
 
 ### Changed
+
 - Adopted Radix UI primitives for the bits where accessibility matters most: `@radix-ui/react-dialog` powers the SettingsDrawer (focus trap, ESC-to-close, scroll lock, portal, ARIA), `@radix-ui/react-alert-dialog` replaces the native `confirm()` on conversation delete, and `@radix-ui/react-tooltip` (wrapped in a top-level `Tooltip.Provider`) labels icon-only buttons (sidebar collapse/expand, "+" new chat in the collapsed left strip). The primitives are unstyled — CSS lives in `App.css` keyed off Radix's `data-state` attributes for fade/pop animations. No styling-framework migration: still vanilla CSS + CSS variables.
 
 - Three-pane layout: left sidebar (conversations + settings), center (chat log + input), right sidebar (provider, model, system prompt). Both sidebars are collapsible (chevron toggle, persisted to settings); collapsed strips show only an expand button (left also keeps a "+" shortcut for new chat). Provider, model row, and the per-conversation system prompt textarea moved out of the chat header into a new `RightSidebar` component. Provider selection is now a single dropdown rather than a radio list.
@@ -338,11 +352,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - The whole UI is themed via CSS variables (`--bg`, `--fg`, `--accent`, `--border`, `--code-bg`, etc.) — no more hard-coded `#4a7dff` / `rgba(127,127,127,...)` etc. scattered through `App.css`.
 
 ### Added (earlier in this Unreleased)
+
 - KV cache reuse across turns for the local backend. Each loaded model now owns a dedicated worker thread that holds the `LlamaContext` and a shadow `Vec<LlamaToken>` of tokens currently in the KV cache. On each request the worker tokenizes the new full prompt, finds the longest common prefix with the cached tokens, calls `clear_kv_cache_seq` to truncate the KV cache to that point, and decodes only the divergent suffix before sampling. Continuing the same conversation now re-decodes ~zero prompt tokens instead of the full history.
 
 - Stop button to abort an in-flight chat. New `cancel_chat` Tauri command flips an `AtomicBool` on `LlmState` that the local generation loop and the cloud stream loop both poll between iterations. The flag is reset at the start of each new `chat`. While streaming, the chat-input Send button is replaced by a red Stop button.
 
 ### Changed
+
 - `LlmState.loaded` switched from `tokio::sync::Mutex<Option<Loaded>>` to `std::sync::Mutex<Option<LoadedHandle>>`. The handle holds the path and an `mpsc::Sender<WorkerRequest>` for the worker thread, which owns the model and context (`LlamaContext<'a>` is `<'a>`-tied to `LlamaModel` and not `Send`, so the only safe way to keep it alive between turns is to pin it to a single thread). `model_status` is now a sync command.
 
 - Cloud providers via [`async-openai`](https://github.com/64bit/async-openai) 0.36 (`chat-completion` feature). Four OpenAI-compatible providers ship out of the box. The first three are env-driven with hard-coded base URL, default model, and recommended-model list; the last is fully user-configurable:
@@ -372,11 +388,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 - Auto-close of unbalanced fenced code blocks during streaming so partial responses render correctly.
 
 ### Changed
+
 - `package.json` gained `react-markdown`, `remark-gfm`, `remark-math`, `rehype-katex`, `rehype-highlight`, `katex`, `highlight.js`.
 
 ## [0.1.0] - initial
 
 ### Added
+
 - Tauri 2 + React 19 + Vite scaffold.
 
 - Rust backend in `src-tauri/src/llm.rs` wrapping `llama-cpp-2` 0.1.146 with the `metal` feature.

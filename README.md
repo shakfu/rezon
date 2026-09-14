@@ -14,7 +14,7 @@ Providers:
 
 - **Other**: same `async-openai` client with model + base URL + API key supplied at runtime. Targets any OpenAI-compatible server — Ollama, LM Studio, `llama.cpp` `server`, self-hosted gateways, etc.
 
-### Cloud providers
+## Cloud providers
 
 | key          | env var              | base URL                         |
 | ------------ | -------------------- | -------------------------------- |
@@ -27,7 +27,7 @@ Recommended-models lists for the named providers live in `crates/rezon-core/mode
 
 ## Layout
 
-```
+```text
 src/                          React + Vite frontend (consumed by rezon-web)
 crates/
   rezon-core/                 Provider-agnostic backend (no Tauri deps)
@@ -184,7 +184,7 @@ The model's own chat template (`model.chat_template(None)`) is used to format th
 
 ## Develop
 
-```
+```text
 make install            bun install (frontend deps)
 make dev                Tauri GUI dev mode
 make build              Tauri GUI release build

@@ -14,7 +14,7 @@ Two dependency ecosystems live side by side:
 
 Verify any upgrade with:
 
-```
+```text
 make test        # cargo test --workspace + clippy -D warnings
 bun run build    # tsc + vite build
 ```
@@ -73,7 +73,7 @@ One crate was **deliberately held back** — see the `llama-cpp-2` issue below.
 
 **Resolution:** pinned back to the known-good version:
 
-```
+```text
 cargo update -p llama-cpp-2 --precise 0.1.146
 cargo update -p llama-cpp-sys-2 --precise 0.1.146
 ```
