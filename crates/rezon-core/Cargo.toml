@@ -8,7 +8,7 @@ repository.workspace = true
 [dependencies]
 anyhow = "1.0.102"
 # `model` adds the /v1/models listing used by `model_catalog`.
-async-openai = { version = "0.36", features = ["chat-completion", "model"] }
+async-openai = { version = "0.42", features = ["chat-completion", "model"] }
 async-trait = "0.1"
 encoding_rs = "0.8.35"
 # Loads a .env file for development launches; see `dotenv.rs`.
@@ -18,7 +18,7 @@ futures = "0.3"
 # Windows Credential Manager, secret-service on Linux. Lives in core
 # rather than the Tauri shell so `rezon-tui` gets the same store —
 # key resolution is backend policy, not a GUI concern.
-keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
+keyring = "4"
 # Pinned, not merely floating. 0.1.147 deleted `llama_cpp_2::openai`
 # and the `wrapper_oai` C++ shim behind it, which is what `llm.rs` uses
 # for OAI-compatible chat templating and streaming tool-call parsing.
@@ -32,16 +32,16 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 # `cargo update` yields a version pair that cannot link.
 llama-cpp-2 = { version = "=0.1.146", features = ["metal"] }
 llama-cpp-sys-2 = "=0.1.146"
-notify = "6"
+notify = "8"
 # `stream` powers web_fetch's incremental body read, which stops at the
 # size cap instead of buffering the whole response first.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 sqlite-vec = "0.1"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1.52.2", features = ["sync", "macros", "time", "rt", "fs", "process", "io-util"] }
 
 [target.'cfg(unix)'.dependencies]

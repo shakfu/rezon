@@ -10,18 +10,18 @@ name = "rezon-tui"
 path = "src/main.rs"
 
 [dependencies]
-anstream = "0.6"
+anstream = "1"
 anstyle = "1"
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
-crossterm = "0.28"
-directories = "5"
+crossterm = "0.29"
+directories = "6"
 nucleo-matcher = "0.3"
-pulldown-cmark = { version = "0.12", default-features = false }
-rusqlite = { version = "0.32", features = ["bundled"] }
+pulldown-cmark = { version = "0.13", default-features = false }
+rusqlite = { version = "0.40", features = ["bundled"] }
 rezon-core = { path = "../rezon-core" }
-rustyline = "14"
+rustyline = "18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 terminal_size = "0.4"

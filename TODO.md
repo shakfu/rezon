@@ -26,6 +26,8 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 
 - [ ] Graceful error when the model has no embedded chat-template metadata (today it just bubbles up as a string).
 
+- [ ] **Port off `llama-cpp-2` 0.1.146.** Pinned because 0.1.147 removed the OAI-compat templating and tool-call parsing `llm.rs` uses; 0.1.158 has no replacement. Options and API diff in `UPGRADING.md`.
+
 - [ ] Handle prompts that overflow `n_ctx` (truncate history vs. error). Now that the KV cache persists across turns, a sliding-window eviction (drop oldest non-system tokens via `clear_kv_cache_seq` + `kv_cache_seq_add`) is more useful than just erroring.
 
 ### Frontend / UX
@@ -55,6 +57,8 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 - [ ] Frontend tests / typecheck in CI.
 
 - [ ] CI workflow (fmt-check, clippy, cargo test, vite build).
+
+- [ ] **Verify `keyring` 4 against a real keychain.** Only the no-entry read path ran live. Untested: save, read back, delete, and reading entries saved by keyring 3. Either save a key in the GUI with the env var unset and restart, or add an `#[ignore]` roundtrip test on a throwaway account.
 
 - [ ] Audit `unwrap()` on the std `Mutex` in `LlmState` for poisoning.
 
@@ -113,3 +117,5 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 ### Engineering
 
 - [ ] Replace `eprintln!` with structured logging (`tracing`).
+
+- [ ] Drop the `katex` entry from `overrides` in `package.json` once `rehype-katex` declares `katex` ^0.19.

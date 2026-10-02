@@ -54,7 +54,11 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **`shell_exec` timeout is a field** (`Default` = 60s) so the overrun path is testable in milliseconds.
 
+- **Dependencies to latest**, including majors: `keyring` 4, `rusqlite` 0.40, `async-openai` 0.42, `vite` 8, TypeScript 7. `keyring` 4 addresses entries as 3 did, so saved API keys survive. `katex` 0.19 is forced into `rehype-katex` via `overrides` so CSS and markup agree. `llama-cpp-2` held back; see `UPGRADING.md`. Tauri 2.12 raises the minimum Rust to 1.90.
+
 ### Fixed
+
+- **Flaky `key_resolution_tests`.** Five tests set and removed one env var on parallel threads, so one could read another's value. They now share a lock.
 
 - **`make test` was red on `main`** — two `useless_borrows_in_formatting` errors, one in each copy of the duplicated resolver.
 

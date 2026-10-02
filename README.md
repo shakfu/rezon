@@ -208,7 +208,7 @@ make clean              rm node_modules dist target …
 
 - macOS with Metal for local models (other platforms untested for Metal; the cloud providers and `rezon-tui` should build anywhere Rust + Tauri prerequisites are available).
 
-- Rust toolchain.
+- Rust 1.90 or newer.
 
 - Bun (frontend deps + Tauri CLI). Only needed for the GUI; `rezon-tui` builds with `cargo` alone.
 

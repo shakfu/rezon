@@ -67,7 +67,11 @@ pub type CacheFile = BTreeMap<String, ProviderCache>;
 pub fn key_fingerprint(api_key: &str) -> String {
     let mut h = Sha256::new();
     h.update(api_key.as_bytes());
-    format!("{:x}", h.finalize())[..16].to_string()
+    h.finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 /// Unix seconds now. Falls back to 0 if the clock is before the epoch,

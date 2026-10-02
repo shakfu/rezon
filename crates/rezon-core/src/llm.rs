@@ -1373,12 +1373,17 @@ mod key_resolution_tests {
     /// clobber a real provider key that happens to be exported.
     const EV: &str = "REZON_TEST_KEY_VAR";
 
+    /// Serialises the tests that write `EV`; the test harness runs them
+    /// on parallel threads against one process environment.
+    static EV_LOCK: StdMutex<()> = StdMutex::new(());
+
     fn clear_env() {
         std::env::remove_var(EV);
     }
 
     #[test]
     fn runtime_override_wins_over_everything() {
+        let _env = lock_recover(&EV_LOCK);
         std::env::set_var(EV, "from-env");
         let store = MapStore::with("api_key:openai", "from-keychain");
         let got = lookup_api_key("openai", EV, Some("from-flag"), &store);
@@ -1388,6 +1393,7 @@ mod key_resolution_tests {
 
     #[test]
     fn keychain_wins_over_environment() {
+        let _env = lock_recover(&EV_LOCK);
         // The structural rule. A packaged GUI never runs a shell
         // profile, so the keychain has to be reachable ahead of the
         // environment or an installed build cannot be given a key.
@@ -1403,6 +1409,7 @@ mod key_resolution_tests {
 
     #[test]
     fn environment_still_answers_when_nothing_is_stored() {
+        let _env = lock_recover(&EV_LOCK);
         // The dev path, which must keep working untouched: terminal
         // launches, `make dev`, CI, and anything a `.env` loaded.
         std::env::set_var(EV, "from-env");
@@ -1413,12 +1420,14 @@ mod key_resolution_tests {
 
     #[test]
     fn nothing_anywhere_yields_none() {
+        let _env = lock_recover(&EV_LOCK);
         clear_env();
         assert_eq!(lookup_api_key("openai", EV, None, &MapStore::empty()), None);
     }
 
     #[test]
     fn blank_and_whitespace_only_values_are_ignored_at_every_level() {
+        let _env = lock_recover(&EV_LOCK);
         // An empty env var or a keychain entry holding only spaces is
         // "not set", not a key. Treating it as one produces a 401 that
         // looks like a provider outage.

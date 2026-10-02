@@ -969,4 +969,31 @@ mod tests {
         assert_eq!(chunks.first().unwrap().0, 0);
         assert_eq!(chunks.last().unwrap().1, input.len());
     }
+
+    #[test]
+    fn sqlite_vec_registers_and_answers_a_knn_query() {
+        // Guards the transmute in `register_sqlite_vec` against FFI
+        // drift when rusqlite's bundled libsqlite3-sys changes.
+        register_sqlite_vec();
+        let db = Connection::open_in_memory().unwrap();
+        init_schema(&db).unwrap();
+        reset_vec_table(&db, 2).unwrap();
+        for (id, v) in [(1i64, [0.0f32, 0.0]), (2, [1.0, 1.0])] {
+            let buf: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+            db.execute(
+                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?1, ?2)",
+                params![id, buf],
+            )
+            .unwrap();
+        }
+        let q: Vec<u8> = [0.9f32, 0.9].iter().flat_map(|f| f.to_le_bytes()).collect();
+        let nearest: i64 = db
+            .query_row(
+                "SELECT rowid FROM vec_chunks WHERE embedding MATCH ?1 AND k = 1",
+                params![q],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nearest, 2);
+    }
 }

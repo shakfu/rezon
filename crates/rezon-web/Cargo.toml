@@ -40,5 +40,5 @@ tokio = { version = "1.52.2", features = ["rt", "macros", "time", "net"] }
 # OAI-compat tool-calling API. See that manifest for the full note.
 llama-cpp-2 = { version = "=0.1.146", features = ["metal"] }
 encoding_rs = "0.8.35"
-async-openai = { version = "0.36", features = ["chat-completion"] }
+async-openai = { version = "0.42", features = ["chat-completion"] }
 
