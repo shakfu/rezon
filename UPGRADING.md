@@ -48,5 +48,7 @@ All dependencies are at latest except `llama-cpp-2`. `make ci` passes.
 
   Porting options:
   1. C++ shim over llama.cpp `common/chat.cpp`, which the sys crate still compiles under the `common` feature. The sys crate does not export the llama.cpp source path, and `common/chat` changes often.
+
   2. Rust: `minijinja` for GGUF templates, the lazy grammar samplers for constrained tool calls, and a parser per model family.
+
   3. Run `llama-server` as a child process and reuse the `async-openai` path. Removes `llama-cpp-2` from chat, but changes packaging.

@@ -6,7 +6,7 @@ This is a design artifact, not committed code. Type signatures are illustrative;
 
 ## Module layout
 
-```
+```text
 crates/rezon-core/src/      // provider-agnostic agent loop + types
   agent/
     mod.rs           // public API

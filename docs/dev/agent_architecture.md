@@ -18,7 +18,7 @@ In a sense, yes - but the composition lives in the **model's reasoning**, not in
 
 Example trace:
 
-```
+```text
 user: "17 * 23 plus the current hour"
 assistant: tool_calls=[calculator("17*23"), current_time()]   # parallel
 tool: {result: 391}

@@ -46,7 +46,7 @@ The library has first-class OpenAI-compatible tool-calling support:
 
 Library output:
 
-```
+```text
 chat_format       = 2
 parse_tool_calls  = true
 grammar           = None
@@ -58,7 +58,7 @@ generation_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n"
 
 Model emission:
 
-```
+```text
 {"type": "function", "function": "calculator", "parameters": {"properties": "{'expression': '17 * 23'}"}}
 ```
 
@@ -78,7 +78,7 @@ Verdict: **Llama 3.2 1B is too small for reliable tool calling without grammar e
 
 Library output:
 
-```
+```text
 chat_format       = 2
 parse_tool_calls  = true
 grammar           = Some(1368 chars)
@@ -94,7 +94,7 @@ generation_prompt = "<|im_start|>assistant\n"
 
 After `<think>\n\n<tool_call>\n` was emitted and the lazy trigger fired, llama.cpp asserted in its grammar engine and aborted the process:
 
-```
+```text
 Grammar still awaiting trigger after token 271 (`\n`)
 Grammar still awaiting trigger after token 151657 (`<tool_call>`)
 Grammar triggered on regex: '<tool_call>\n'
@@ -110,13 +110,13 @@ Verdict for grammar route: **not viable on `llama-cpp-2` 0.1.146**. Skip grammar
 
 Model emission (full):
 
-```
+```text
 <think>\n\n<tool_call>\n{"name": "calculator", "arguments": {"expression": "17 * 23"}}\n</tool_call>
 ```
 
 Streaming parser produced 13 deltas in OpenAI shape:
 
-```
+```text
 {"content":"<think>"}
 {"content":"\n\n"}
 {"tool_calls":[{"index":0,"id":"...","type":"function","function":{"name":"calculator","arguments":"{"}}]}

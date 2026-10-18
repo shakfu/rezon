@@ -82,19 +82,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **Vault redo** (`crates/rezon-core/src/journal.rs::redo_last_op`). Reapplies the most-recent `Op::Undo`: restores its `before_sha` content (the disk state immediately before the undo ran) and records a fresh `Op::Write` tagged `tool: "redo"`. No new `Op` variant — a tagged write keeps the chain linear, so `undo→redo→ undo→redo` cycles cleanly and a fresh write between undo and redo invalidates the redo stack (text-editor convention). Surface in all three shells: `/redo` TUI command, `vault_redo` Tauri command returning `RedoReport { path, targetUndoId, wasCreation }`, `↷ Redo` button in the NotesView editor toolbar. Three new tests cover round-trip, intervening-write invalidation, and the deletion-undo redo path.
 
-- **Vault history panel** (`src/notes/JournalPanel.tsx`). Modal dialog backed by a new `vault_journal_recent(vault, limit?)` Tauri command (default 100 rows, clamped 1..=1000) over
-  `journal::recent_entries`. Renders `When | Kind | Tool | Path`
-  newest-first; `write` rows tinted green, `undo` rows red to match the diff-preview palette. Same-day timestamps as `HH:MM`, older as `YYYY-MM-DD HH:MM`. Triggered from a new `History` button in NotesView's editor toolbar. Read-only — undo / redo remain the action surface for v1; per-row "revert from here" is a future addition once multi-step undo lands in core.
+- **Vault history panel** (`src/notes/JournalPanel.tsx`). Modal dialog backed by a new `vault_journal_recent(vault, limit?)` Tauri command (default 100 rows, clamped 1..=1000) over `journal::recent_entries`. Renders `When | Kind | Tool | Path` newest-first; `write` rows tinted green, `undo` rows red to match the diff-preview palette. Same-day timestamps as `HH:MM`, older as `YYYY-MM-DD HH:MM`. Triggered from a new `History` button in NotesView's editor toolbar. Read-only — undo / redo remain the action surface for v1; per-row "revert from here" is a future addition once multi-step undo lands in core.
 
-- **`JournalEntryDto`** — frontend-stable shape over the core's `#[serde(tag="op")]` enum. Flattens into a camelCase
-  `{ id, ts, tool, path, kind: "write"|"undo", beforeSha,
-  afterSha, targetId? }` so the frontend never pattern-matches on serde tags.
+- **`JournalEntryDto`** — frontend-stable shape over the core's `#[serde(tag="op")]` enum. Flattens into a camelCase `{ id, ts, tool, path, kind: "write"|"undo", beforeSha, afterSha, targetId? }` so the frontend never pattern-matches on serde tags.
 
 - **`read_note(path)` agent tool** (`crates/rezon-core/src/agent/tools/read_note.rs`). Read-only, no confirmation. Returns `{ vault, path, content }` for a note at the given vault-relative path. Pairs with `search_notes` (which returns snippets, not full bodies) to close the agent's read loop: search → read → write/append/edit. Registered together with `search_notes` in `register_search_notes` — both depend on `SearchState::active_vault`, both are read-only. Two tests.
 
-- **Wikilink expansion in chat + system prompts** (`crates/rezon-core/src/wikilink.rs`).
-  Read-only `[[Target]]` / `[[Folder/Target]]` / `[[Target|Alias]]` markers
-  in user messages and the system prompt resolve against the active vault via `vault_resolve_wikilink`, and the resolved note bodies are appended to the message as a `<context>\n## <rel path>\n…\n</context>` block. Stored conversation keeps the raw markers (so `/history` reads naturally and edits re-resolve next turn); expansion happens only at the send boundary and only on the system + most-recent user turn so prompt caching survives prior turns. Unresolved targets surface as `UiEvent::Error` in the TUI and a `chat-warning` Tauri event for the frontend. Eight unit tests (`scan_*`, `expand_*`).
+- **Wikilink expansion in chat + system prompts** (`crates/rezon-core/src/wikilink.rs`). Read-only `[[Target]]` / `[[Folder/Target]]` / `[[Target|Alias]]` markers in user messages and the system prompt resolve against the active vault via `vault_resolve_wikilink`, and the resolved note bodies are appended to the message as a `<context>\n## <rel path>\n…\n</context>` block. Stored conversation keeps the raw markers (so `/history` reads naturally and edits re-resolve next turn); expansion happens only at the send boundary and only on the system + most-recent user turn so prompt caching survives prior turns. Unresolved targets surface as `UiEvent::Error` in the TUI and a `chat-warning` Tauri event for the frontend. Eight unit tests (`scan_*`, `expand_*`).
 
 - **Vault-write agent tools** (`crates/rezon-core/src/agent/tools/write_note.rs`): `write_note(path, content, overwrite=false)`, `append_note(path, content, create_if_missing=false)`, `edit_note(path, find, replace)`, `undo_note()`. All four gate on user confirmation, path-normalize (strip leading `/`, reject `..`, auto-append `.md`), call `vault_index_touch` so changes are searchable immediately, and report the journal outcome (entry id + git_committed + warning?) in their return payload. `edit_note`'s `find` must match exactly once — 0 or N≥2 matches error with a hint to pass a longer / more specific snippet. Registered together via `register_write_note(reg, search)` alongside `search_notes` when a vault is open.
 
@@ -174,17 +168,13 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **`rezon-tui` crate** — sequential REPL chat shell over `rezon-core`, shipped as the `rezon-tui` binary. Uses plain stdin/stdout (no alternate-screen takeover) so terminal scrollback / copy-paste / piping all work. clap CLI mirrors the GUI's provider/model knobs: `--provider {local,openai,anthropic,openrouter,other}`, `--model`, `--gguf`, `--base-url`, `--api-key`, `--system`, `--agent`, `--max-steps`.
 
-- **Slash-command surface** in `rezon-tui`: `/help`, `/exit`, `/new`, `/conv [n]`, `/next`, `/prev`, `/rename`, `/delete`, `/agent`, `/chat`, `/model`, `/provider`, `/max-steps`, `/system [text]`, `/load <gguf>`, `/history`, `/search <query>` (full-text search across all conversations, newest first, with cap), `/tools` /
-  `/tools enable|disable <name>` (runtime tool gate; persists),
-  `/clear`, `/vault [path|close]`, `/note <path>`, `/find <query>`
-  (semantic when an embed model is loaded, FTS5 otherwise), `/embed [<gguf>]`.
+- **Slash-command surface** in `rezon-tui`: `/help`, `/exit`, `/new`, `/conv [n]`, `/next`, `/prev`, `/rename`, `/delete`, `/agent`, `/chat`, `/model`, `/provider`, `/max-steps`, `/system [text]`, `/load <gguf>`, `/history`, `/search <query>` (full-text search across all conversations, newest first, with cap), `/tools` / `/tools enable|disable <name>` (runtime tool gate; persists), `/clear`, `/vault [path|close]`, `/note <path>`, `/find <query>` (semantic when an embed model is loaded, FTS5 otherwise), `/embed [<gguf>]`.
 
 - **Conversation persistence**: rezon-tui stores all conversations, the active conversation id, the active vault path, and disabled tools as JSON under `<ProjectDirs::config_dir>/conversations.json` (macOS: `~/Library/Application Support/com.rezon.rezon-tui/`).
 
 - **rustyline line editor** with persistent history at `<config_dir>/history.txt` — arrow keys, Home/End, Ctrl-A/E, Ctrl-W, Ctrl-U/K, Ctrl-R reverse-search, ↑/↓ history. Tab completion for slash commands and (for path-taking verbs `/load`, `/embed`, `/vault`, `/note`) for filesystem paths.
 
-- **Streaming UX**: tokens stream straight to stdout as they arrive. Cancellation via Ctrl-C during a stream (flips `LlmState`/`AgentRunHandle` cancel flags); second Ctrl-C force-exits. Ctrl-D on an empty line exits cleanly. Per-turn stats printed in magenta after each response:
-  `[ Prompt: N tok | Generation: N tok @ N.N t/s ]`.
+- **Streaming UX**: tokens stream straight to stdout as they arrive. Cancellation via Ctrl-C during a stream (flips `LlmState`/`AgentRunHandle` cancel flags); second Ctrl-C force-exits. Ctrl-D on an empty line exits cleanly. Per-turn stats printed in magenta after each response: `[ Prompt: N tok | Generation: N tok @ N.N t/s ]`.
 
 - **Agent mode in the TUI**: `--agent` / `/agent`. Tool calls render inline as `→ name` then `✓ name: {result}` or `✗ name: error`. Tool confirmations prompt inline (`approve tool X with args … [y/N] >`) and block the agent loop on a oneshot. `search_notes` registers automatically when a vault is open.
 
@@ -194,9 +184,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **Spinner** for long-running blocking loads (`/load`, `/embed`, startup `--gguf`). Braille frames at 80 ms via a tokio task; cursor hidden during spin, restored on stop; suppressed on non-tty.
 
-- **Cross-platform color**: `anstyle` for style values, `anstream` for output. SGR codes stripped automatically when stdout isn't a
-  tty (`rezon-tui --help | cat`); translated to Win32 console API
-  calls on legacy Windows; `NO_COLOR` honored.
+- **Cross-platform color**: `anstyle` for style values, `anstream` for output. SGR codes stripped automatically when stdout isn't a tty (`rezon-tui --help | cat`); translated to Win32 console API calls on legacy Windows; `NO_COLOR` honored.
 
 - **Makefile targets**: `build-tui`, `build-tui-release`, `run-tui ARGS="…"`, `run-tui-release ARGS="…"`.
 
@@ -218,8 +206,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **Per-conversation settings** in `rezon-tui`. Each conversation carries optional overrides for `provider`, `model`, `base_url`, `api_key`, `agent_mode`, and `show_thinking`; the REPL composes effective values per call from `Conversation::settings` falling back to CLI defaults. `/model`, `/provider`, `/agent`, `/chat` now write to the active conversation (persisted) instead of the process. Switching conversations via `/conv` / `/next` / `/prev` automatically picks up the new conversation's settings.
 
-- **`/thinking on|off|toggle`** — surface or hide agent reasoning
-  blocks (`<think>` tokens emitted by Qwen3 and some Anthropic prompt-cache responses). Per-conversation; default off. `--show-thinking` CLI flag sets the launch default. Thinking deltas stream in dim mode and an inline `C_RESET` precedes the next content token so the assistant text isn't tinted.
+- **`/thinking on|off|toggle`** — surface or hide agent reasoning blocks (`<think>` tokens emitted by Qwen3 and some Anthropic prompt-cache responses). Per-conversation; default off. `--show-thinking` CLI flag sets the launch default. Thinking deltas stream in dim mode and an inline `C_RESET` precedes the next content token so the assistant text isn't tinted.
 
 - **`/history` markdown rendering** — prior assistant turns route through `markdown::render` so they show with the same bold / italic / heading / list / code-block formatting as live responses. System / tool / user lines unchanged.
 
@@ -271,9 +258,7 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - `LlmState`, `SearchState`, `EmbedState` are now registered as `Arc<T>` in Tauri's managed state so they can be shared between the chat command and the agent loop without copies.
 
-- `ChatSink` trait introduced in `rezon-core::llm` to replace the
-  previous direct `app.emit("chat-token"|"chat-stats"|"chat-done", …)`
-  calls. `TauriChatSink` (in `rezon-web`) preserves the exact event names and payloads.
+- `ChatSink` trait introduced in `rezon-core::llm` to replace the previous direct `app.emit("chat-token"|"chat-stats"|"chat-done", …)` calls. `TauriChatSink` (in `rezon-web`) preserves the exact event names and payloads.
 
 - `SearchState` now takes its data directory at construction (`SearchState::new(data_dir)`); the previous `Default` impl required an `AppHandle` to resolve `app_data_dir`. `rezon-web` builds it inside `.setup()` after the handle is available.
 

@@ -150,15 +150,11 @@ Key features:
 
 The boundaries between core and the two shells are three traits in `rezon-core`:
 
-- `ChatSink` — token / stats / done callbacks for the non-tool chat
-  path. `TauriChatSink` forwards to `app.emit("chat-token"|"chat-stats"
-  |"chat-done", …)`; `TuiChatSink` pushes into an mpsc the REPL
-  drains.
+- `ChatSink` — token / stats / done callbacks for the non-tool chat path. `TauriChatSink` forwards to `app.emit("chat-token"|"chat-stats" |"chat-done", …)`; `TuiChatSink` pushes into an mpsc the REPL drains.
 
 - `EventSink` (agent path) — token, tool start/end, stats, done, cancelled, error.
 
-- `ConfirmationGate` — async `ask(call) -> Approved | Denied`.
-  `TauriConfirmationGate` round-trips through a `confirm_tool_call` command; `TuiConfirmationGate` writes a `UiEvent::Confirm` and blocks on a oneshot the REPL fulfils after reading y/n from stdin.
+- `ConfirmationGate` — async `ask(call) -> Approved | Denied`. `TauriConfirmationGate` round-trips through a `confirm_tool_call` command; `TuiConfirmationGate` writes a `UiEvent::Confirm` and blocks on a oneshot the REPL fulfils after reading y/n from stdin.
 
 Frontend event names and payloads are unchanged from before the workspace split — no migration needed for the existing React UI.
 

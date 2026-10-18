@@ -33,6 +33,7 @@ Evaluation of Rust LLM/agent frameworks for rezon, given that agents, tools, and
 ### Rig
 
 Strengths:
+
 - Largest provider catalog and vector-store ecosystem in Rust
 
 - Native Anthropic client unlocks features the OpenAI-compat shim hides (prompt caching control, extended thinking, citations)
@@ -40,6 +41,7 @@ Strengths:
 - Mature, well-documented, broader community
 
 Weaknesses for rezon:
+
 - No llama.cpp / GGUF support. The most carefully engineered part of rezon's backend (worker thread, KV-cache reuse, Metal teardown) gets zero help.
 
 - Adopting rig means two paradigms side-by-side: rig for cloud, custom for local. Tools/agents/RAG would only work on cloud unless we implement rig's `CompletionModel` trait over the local worker ourselves.
@@ -47,6 +49,7 @@ Weaknesses for rezon:
 ### AutoAgents
 
 Strengths:
+
 - First-class llama.cpp + Metal support maps directly onto rezon's existing local stack
 
 - Same cloud providers we already use (OpenAI, Anthropic, OpenRouter)
@@ -56,6 +59,7 @@ Strengths:
 - Typed pub/sub multi-agent orchestration
 
 Weaknesses:
+
 - v0.3.x: expect breaking changes, fewer answers in the wild, occasional need to PR upstream
 
 - Vector-store story is thin (Qdrant only) - weaker if RAG breadth matters
