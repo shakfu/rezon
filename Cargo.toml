@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rezon-web", "crates/rezon-core", "crates/rezon-tui"]
+members = ["crates/rezon-web", "crates/rezon-core", "crates/rezon-tui", "crates/rezon-llama-oai"]
 
 # Single source of truth for the version. Each crate inherits it with
 # `version.workspace = true`, so the three cannot drift apart the way

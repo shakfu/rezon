@@ -20,10 +20,10 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
-use llama_cpp_2::openai::OpenAIChatTemplateParams;
+use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use rezon_llama_oai::{LlamaModelOaiExt, OpenAIChatTemplateParams};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -813,9 +813,7 @@ fn run_chat_with_cache(
         .apply_chat_template(&template, &chat_msgs, true)
         .map_err(|e| format!("apply_chat_template: {e}"))?;
 
-    let new_tokens = model
-        .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| format!("str_to_token: {e}"))?;
+    let new_tokens = model.vocab().tokenize(prompt.as_bytes(), true, true);
 
     let mut common = 0usize;
     while common < cached.len() && common < new_tokens.len() && cached[common] == new_tokens[common]
@@ -884,13 +882,11 @@ fn run_chat_with_cache(
         let token = sampler.sample(ctx, batch.n_tokens() - 1);
         sampler.accept(token);
 
-        if model.is_eog_token(token) {
+        if model.vocab().is_eog(token) {
             break;
         }
 
-        let bytes = model
-            .token_to_piece_bytes(token, 64, false, None)
-            .map_err(|e| format!("token_to_piece_bytes: {e}"))?;
+        let bytes = model.vocab().token_to_piece(token, false, None);
         let mut piece = String::with_capacity(bytes.len() + 4);
         let _ = decoder.decode_to_string(&bytes, &mut piece, false);
 
@@ -950,8 +946,6 @@ fn run_agent_with_cache(
         use_jinja: true,
         parallel_tool_calls: true,
         enable_thinking: false,
-        add_bos: false,
-        add_eos: false,
         parse_tool_calls: true,
     };
     let tmpl = model
@@ -968,9 +962,7 @@ fn run_agent_with_cache(
         return Err(msg);
     }
 
-    let prompt_tokens = model
-        .str_to_token(&tmpl.prompt, AddBos::Always)
-        .map_err(|e| format!("str_to_token: {e}"))?;
+    let prompt_tokens = model.vocab().tokenize(tmpl.prompt.as_bytes(), true, true);
 
     let mut common = 0usize;
     while common < cached.len()
@@ -1051,14 +1043,12 @@ fn run_agent_with_cache(
         let token = sampler.sample(ctx, batch.n_tokens() - 1);
         sampler.accept(token);
 
-        if model.is_eog_token(token) {
+        if model.vocab().is_eog(token) {
             hit_eos = true;
             break;
         }
 
-        let bytes = model
-            .token_to_piece_bytes(token, 64, false, None)
-            .map_err(|e| format!("token_to_piece_bytes: {e}"))?;
+        let bytes = model.vocab().token_to_piece(token, false, None);
         let mut piece = String::with_capacity(bytes.len() + 4);
         let _ = decoder.decode_to_string(&bytes, &mut piece, false);
 
@@ -1116,11 +1106,7 @@ fn run_agent_with_cache(
     Ok(())
 }
 
-fn oai_delta_to_agent_deltas(json: &str, emitted_tool_calls: &mut bool) -> Vec<AgentDelta> {
-    let v: Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+fn oai_delta_to_agent_deltas(v: &Value, emitted_tool_calls: &mut bool) -> Vec<AgentDelta> {
     let mut out = Vec::new();
 
     if let Some(content) = v.get("content").and_then(Value::as_str) {

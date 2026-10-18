@@ -106,6 +106,8 @@ This is an **upstream llama.cpp grammar bug**, triggered the moment constrained 
 
 Verdict for grammar route: **not viable on `llama-cpp-2` 0.1.146**. Skip grammar entirely until the upstream fix lands.
 
+Re-tested 2026-10-18 on 0.1.160 (via `rezon-llama-oai`), Qwen3-4B: same abort, now `GGML_ASSERT(!stacks.empty())` at `llama-grammar.cpp:948`. The unconstrained path streams correct tool-call deltas.
+
 ### Run 2b: with grammar disabled (`NO_GRAMMAR=1`)
 
 Model emission (full):

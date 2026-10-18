@@ -1,6 +1,6 @@
-// Spike: local-model tool calling via llama-cpp-2's oaicompat surface.
+// Spike: local-model tool calling via `rezon-llama-oai`.
 //
-// Goal: confirm that `apply_chat_template_with_tools_oaicompat` +
+// Goal: confirm that `apply_chat_template_oaicompat` with tools +
 // grammar-lazy sampling + `ChatParseStateOaicompat` produces OpenAI-shaped
 // tool_calls deltas from a real GGUF model. Single-turn, no actual tool
 // execution - just elicit a tool call and verify the parse stream.
@@ -33,9 +33,12 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, GrammarTriggerType, LlamaChatMessage, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use rezon_llama_oai::{
+    ChatTemplateResult, GrammarTriggerType, LlamaModelOaiExt, OpenAIChatTemplateParams,
+};
 
 const N_CTX: u32 = 4096;
 const MAX_NEW_TOKENS: i32 = 1024;
@@ -69,21 +72,22 @@ fn main() -> Result<()> {
     let template = model
         .chat_template(None)
         .map_err(|e| anyhow!("chat_template: {e}"))?;
-    let messages = vec![
-        LlamaChatMessage::new("system".to_string(), SYSTEM_PROMPT.to_string())
-            .map_err(|e| anyhow!("system msg: {e}"))?,
-        LlamaChatMessage::new("user".to_string(), user_prompt.clone())
-            .map_err(|e| anyhow!("user msg: {e}"))?,
-    ];
+    let messages_json = serde_json::json!([
+        { "role": "system", "content": SYSTEM_PROMPT },
+        { "role": "user", "content": user_prompt },
+    ])
+    .to_string();
+    let params = OpenAIChatTemplateParams {
+        messages_json: &messages_json,
+        tools_json: Some(&tools_json),
+        add_generation_prompt: true,
+        use_jinja: true,
+        parse_tool_calls: true,
+        ..Default::default()
+    };
     let tmpl_result = model
-        .apply_chat_template_with_tools_oaicompat(
-            &template,
-            &messages,
-            Some(&tools_json),
-            None,
-            true, // add generation prompt
-        )
-        .map_err(|e| anyhow!("apply_chat_template_with_tools_oaicompat: {e}"))?;
+        .apply_chat_template_oaicompat(&template, &params)
+        .map_err(|e| anyhow!("apply_chat_template_oaicompat: {e}"))?;
 
     println!(
         "--- rendered prompt ---\n{}\n--- end prompt ---",
@@ -126,8 +130,8 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!("new_context: {e}"))?;
 
     let prompt_tokens = model
-        .str_to_token(&tmpl_result.prompt, AddBos::Always)
-        .map_err(|e| anyhow!("str_to_token: {e}"))?;
+        .vocab()
+        .tokenize(tmpl_result.prompt.as_bytes(), true, true);
     println!("prompt token count = {}", prompt_tokens.len());
 
     let mut batch = LlamaBatch::new(prompt_tokens.len().max(512), 1);
@@ -166,14 +170,12 @@ fn main() -> Result<()> {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
 
-        if model.is_eog_token(token) {
+        if model.vocab().is_eog(token) {
             println!("\n[eog token reached]");
             break;
         }
 
-        let bytes = model
-            .token_to_piece_bytes(token, 64, false, None)
-            .map_err(|e| anyhow!("token_to_piece_bytes: {e}"))?;
+        let bytes = model.vocab().token_to_piece(token, false, None);
         let mut piece = String::with_capacity(bytes.len() + 4);
         let _ = decoder.decode_to_string(&bytes, &mut piece, false);
 
@@ -272,10 +274,7 @@ fn build_tools_json() -> String {
     .expect("serialize tools_json")
 }
 
-fn build_sampler(
-    model: &LlamaModel,
-    r: &llama_cpp_2::model::ChatTemplateResult,
-) -> Result<LlamaSampler> {
+fn build_sampler(model: &LlamaModel, r: &ChatTemplateResult) -> Result<LlamaSampler> {
     // Always finish with temperature + dist sampling.
     let tail = vec![LlamaSampler::temp(0.7), LlamaSampler::dist(1234)];
 
@@ -290,7 +289,7 @@ fn build_sampler(
 
     // Partition triggers: words go to trigger_words, single tokens go to
     // trigger_tokens. Pattern triggers are not directly supported by the
-    // grammar_lazy sampler API exposed in 0.1.146; for the spike we fall
+    // grammar_lazy sampler API; for the spike we fall
     // back to using their text value as a word trigger which is "good
     // enough" to demonstrate the path. (For production we'd use the
     // pattern-aware variant.)
@@ -299,11 +298,7 @@ fn build_sampler(
     let mut had_pattern = false;
     for t in &r.grammar_triggers {
         match t.trigger_type {
-            GrammarTriggerType::Token => {
-                if let Some(tok) = t.token {
-                    trigger_tokens.push(tok);
-                }
-            }
+            GrammarTriggerType::Token => trigger_tokens.push(LlamaToken(t.token)),
             GrammarTriggerType::Word => {
                 trigger_words.push(t.value.as_bytes().to_vec());
             }

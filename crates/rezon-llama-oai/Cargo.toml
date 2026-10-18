@@ -1,0 +1,21 @@
+[package]
+name = "rezon-llama-oai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAI-compatible chat templating and tool-call parsing for llama-cpp-2"
+
+[dependencies]
+# Both pinned with `=`. `build.rs` compiles against the llama.cpp headers
+# the sys crate ships, and `common/chat.h` changes between releases; the
+# shim must be re-checked on every bump. `lib.rs` also relies on the
+# `#[repr(transparent)]` layout of `LlamaModel` in this exact release.
+llama-cpp-2 = "=0.1.160"
+llama-cpp-sys-2 = "=0.1.160"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[build-dependencies]
+cc = "1"

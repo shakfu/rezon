@@ -25,7 +25,7 @@ use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::LlamaModel;
 use serde::Serialize;
 
 use crate::search::{open_vault, SearchHit, SearchState};
@@ -238,9 +238,7 @@ fn embed_one(
     let n_embd = model.n_embd() as usize;
     let n_ctx = ctx.n_ctx() as usize;
 
-    let mut tokens = model
-        .str_to_token(text, AddBos::Always)
-        .map_err(|e| format!("str_to_token: {e}"))?;
+    let mut tokens = model.vocab().tokenize(text.as_bytes(), true, true);
     if tokens.is_empty() {
         return Ok(vec![0.0; n_embd]);
     }

@@ -70,6 +70,8 @@ crates/
       vault.rs                `VaultCtx` (Arc<SearchState> + Arc<EmbedState>).
       input.rs                rustyline editor + tab completion.
       picker.rs               nucleo + crossterm fuzzy picker.
+  rezon-llama-oai/            OAI-compatible templating + tool-call parsing
+    src/shim.cpp              C ABI over llama.cpp `common/chat.h`.
       markdown.rs             Inline markdown -> ANSI renderer.
       conv_index.rs           FTS5 index over conversation history.
       setup.rs                First-run provider/model setup flow.

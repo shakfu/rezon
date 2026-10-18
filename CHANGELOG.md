@@ -56,6 +56,8 @@ All notable changes to this project. Format loosely follows [Keep a Changelog](h
 
 - **Dependencies to latest**, including majors: `keyring` 4, `rusqlite` 0.40, `async-openai` 0.42, `vite` 8, TypeScript 7. `keyring` 4 addresses entries as 3 did, so saved API keys survive. `katex` 0.19 is forced into `rehype-katex` via `overrides` so CSS and markup agree. `llama-cpp-2` held back; see `UPGRADING.md`. Tauri 2.12 raises the minimum Rust to 1.90.
 
+- **`llama-cpp-2` 0.1.146 -> 0.1.160.** The OAI-compatible templating and tool-call parsing that 0.1.147 dropped now live in a new crate, `rezon-llama-oai`: a C++ shim over llama.cpp `common/chat.h`, compiled against the headers the sys crate ships and linked to the `llama-common` it builds. Chosen over a Rust reimplementation (`minijinja` plus per-family parsers) because llama.cpp now derives parsers from the template, and over a `llama-server` sidecar because embeddings and the KV-cache worker stay in-process. Both crates stay `=`-pinned: `common/chat.h` changes between releases, and the shim reads `LlamaModel`'s `#[repr(transparent)]` pointer, which llama-cpp-2 keeps private. Dead `add_bos` / `add_eos` params dropped; llama.cpp overwrote them from the vocab.
+
 ### Fixed
 
 - **Flaky `key_resolution_tests`.** Five tests set and removed one env var on parallel threads, so one could read another's value. They now share a lock.

@@ -26,7 +26,7 @@ Known gaps and ideas, roughly ordered by usefulness. Not committed scope.
 
 - [ ] Graceful error when the model has no embedded chat-template metadata (today it just bubbles up as a string).
 
-- [ ] **Port off `llama-cpp-2` 0.1.146.** Pinned because 0.1.147 removed the OAI-compat templating and tool-call parsing `llm.rs` uses; 0.1.158 has no replacement. Options and API diff in `UPGRADING.md`.
+- [ ] File the upstream drafts in `docs/dev/issues/`: export the llama.cpp source path from llama-cpp-sys-2 and expose `LlamaModel::as_ptr`. Each removes one workaround in `rezon-llama-oai`.
 
 - [ ] Handle prompts that overflow `n_ctx` (truncate history vs. error). Now that the KV cache persists across turns, a sliding-window eviction (drop oldest non-system tokens via `clear_kv_cache_seq` + `kv_cache_seq_add`) is more useful than just erroring.
 

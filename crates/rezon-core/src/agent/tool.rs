@@ -4,7 +4,7 @@
 // for the cloud and local agent paths. Schemas are emitted in OpenAI
 // shape because both backends consume that format directly:
 //   - async-openai's `tools` field
-//   - llama-cpp-2's `apply_chat_template_with_tools_oaicompat`
+//   - `rezon-llama-oai`'s `apply_chat_template_oaicompat`
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
@@ -135,8 +135,8 @@ impl ToolRegistry {
     }
 
     /// OpenAI-shaped tools array, ready to feed both `async-openai`'s
-    /// `tools` request field and llama-cpp-2's
-    /// `apply_chat_template_with_tools_oaicompat` `tools_json` arg.
+    /// `tools` request field and `rezon-llama-oai`'s
+    /// `apply_chat_template_oaicompat` `tools_json` arg.
     pub fn openai_schemas(&self) -> Vec<Value> {
         self.tools
             .values()
